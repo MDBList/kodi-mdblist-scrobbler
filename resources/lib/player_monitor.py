@@ -7,6 +7,7 @@ import xbmcaddon
 import xbmcgui
 
 from resources.lib import oauth
+from resources.lib.mdblist_api import MDBListApiError, push_sync_items
 from resources.lib.timer import Timer
 from resources.lib.utils import jsonrpc_request, fix_unique_ids
 
@@ -555,28 +556,10 @@ class PlayerMonitor(xbmc.Player):
         else:
             return False
 
-        access_token = oauth.ensure_valid_token()
-        apikey = "" if access_token else self.get_string_setting("apikey")
-
-        if not access_token and not apikey:
-            xbmc.log("MDBList Scrobbler: Cannot rate on MDBList, not authenticated", level=xbmc.LOGERROR)
-            return False
-
-        if access_token:
-            url = "{}/sync/ratings".format(DEFAULT_BASE_URL)
-            headers = {"Authorization": "Bearer {}".format(access_token)}
-        else:
-            url = "{}/sync/ratings?apikey={}".format(DEFAULT_BASE_URL, apikey)
-            headers = None
-
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
-            if response.status_code >= 400:
-                xbmc.log("MDBList Scrobbler: MDBList rating error {} response={}".format(
-                    response.status_code, response.text[:200]), level=xbmc.LOGERROR)
-                return False
+            push_sync_items("/sync/ratings", payload)
             return True
-        except requests.exceptions.RequestException as exception:
+        except MDBListApiError as exception:
             xbmc.log("MDBList Scrobbler: MDBList rating request failed - {}".format(str(exception)), level=xbmc.LOGERROR)
             return False
 

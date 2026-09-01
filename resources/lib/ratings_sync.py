@@ -1,0 +1,165 @@
+import datetime
+
+from resources.lib import library_snapshot, mdblist_api, sync_state
+from resources.lib.sync_payload import build_shows_payload, chunked
+from resources.lib.utils import jsonrpc_request
+
+CATEGORY = "ratings"
+JOURNAL_CATEGORY = "rated"
+BATCH_SIZE = 100
+
+
+def _now_iso():
+    return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# --- push: Kodi -> MDBList -----------------------------------------------
+
+def _current_rated_items(snapshot):
+    items = {}
+    for movie in library_snapshot.iter_movies(snapshot):
+        if movie["userrating"] > 0:
+            key = library_snapshot.canonical_movie_key(movie["ids"])
+            if key:
+                items[key] = {"type": "movie", "ids": movie["ids"], "rating": movie["userrating"]}
+    for episode in library_snapshot.iter_episodes(snapshot):
+        if episode["userrating"] > 0:
+            key = library_snapshot.canonical_episode_key(episode["show_ids"], episode["season"], episode["episode"])
+            if key:
+                items[key] = {
+                    "type": "episode", "show_ids": episode["show_ids"],
+                    "season": episode["season"], "episode": episode["episode"],
+                    "rating": episode["userrating"],
+                }
+    return items
+
+
+def _push_add(items):
+    movies_payload = [{"ids": item["ids"], "rating": item["rating"]} for item in items if item["type"] == "movie"]
+    episode_entries = [
+        (item["show_ids"], item["season"], item["episode"], {"rating": item["rating"]})
+        for item in items if item["type"] == "episode"
+    ]
+
+    for batch in chunked(movies_payload, BATCH_SIZE):
+        mdblist_api.push_sync_items("/sync/ratings", {"movies": batch})
+    for batch in chunked(episode_entries, BATCH_SIZE):
+        mdblist_api.push_sync_items("/sync/ratings", {"shows": build_shows_payload(batch)})
+
+
+def _push_remove(items):
+    movies_payload = [{"ids": item["ids"]} for item in items if item["type"] == "movie"]
+    episode_entries = [
+        (item["show_ids"], item["season"], item["episode"], {})
+        for item in items if item["type"] == "episode"
+    ]
+
+    for batch in chunked(movies_payload, BATCH_SIZE):
+        mdblist_api.push_sync_items("/sync/ratings/remove", {"movies": batch})
+    for batch in chunked(episode_entries, BATCH_SIZE):
+        mdblist_api.push_sync_items("/sync/ratings/remove", {"shows": build_shows_payload(batch)})
+
+
+def push(snapshot):
+    known = sync_state.get_known_items(CATEGORY)
+    current = _current_rated_items(snapshot)
+
+    to_add = [item for key, item in current.items() if key not in known or known[key].get("rating") != item.get("rating")]
+    to_remove = [item for key, item in known.items() if key not in current]
+
+    if to_add:
+        _push_add(to_add)
+    if to_remove:
+        _push_remove(to_remove)
+
+    sync_state.set_known_items(CATEGORY, current)
+    return {"pushed_add": len(to_add), "pushed_remove": len(to_remove)}
+
+
+# --- pull: MDBList -> Kodi ---------------------------------------------------
+# No local "rated at" timestamp exists in Kodi, so unlike watched status this
+# is not true last-write-wins: push() always runs first (see sync_orchestrator),
+# so on the first sync any conflicting item is already resolved local-wins by
+# the time pull happens. After that, pull only ever applies items that changed
+# remotely since our own last sync watermark, which keeps the collision window
+# to "rated locally and remotely in between two sync runs" -- acceptable given
+# Kodi has nothing to compare against.
+
+def _set_rating(record, rating):
+    params = {"userrating": rating}
+    if record["dbtype"] == "movie":
+        jsonrpc_request("VideoLibrary.SetMovieDetails", dict(params, movieid=record["dbid"]))
+    else:
+        jsonrpc_request("VideoLibrary.SetEpisodeDetails", dict(params, episodeid=record["dbid"]))
+
+
+def _apply_movie_rating(snapshot, ids, rating):
+    match = library_snapshot.find_movie_match(snapshot, ids)
+    if not match or match["userrating"] == rating:
+        return False
+    _set_rating(match, rating)
+    return True
+
+
+def _apply_episode_rating(snapshot, show_ids, season, episode, rating):
+    match = library_snapshot.find_episode_match(snapshot, show_ids, season, episode)
+    if not match or match["userrating"] == rating:
+        return False
+    _set_rating(match, rating)
+    return True
+
+
+def _pull_full(snapshot):
+    # extended=None (full, not ids_only) -- MDBList's ids_only ratings response
+    # only carries the episode's own tmdb id, not season/episode/show, so it
+    # can't be matched against the Kodi library the way ids_only works for /sync/watched.
+    data = mdblist_api.fetch_sync_items("/sync/ratings", extended=None)
+    applied = 0
+
+    for entry in data.get("movies", []):
+        ids = (entry.get("movie") or {}).get("ids") or {}
+        if ids and _apply_movie_rating(snapshot, ids, entry.get("rating") or 0):
+            applied += 1
+
+    for entry in data.get("episodes", []):
+        episode = entry.get("episode") or {}
+        show_ids = (episode.get("show") or {}).get("ids") or {}
+        if show_ids and _apply_episode_rating(
+            snapshot, show_ids, episode.get("season"), episode.get("number"), entry.get("rating") or 0
+        ):
+            applied += 1
+
+    sync_state.set_synced_at(CATEGORY, _now_iso())
+    return {"pulled_applied": applied, "mode": "full"}
+
+
+def _pull_incremental(snapshot, entries):
+    applied = 0
+    for entry in entries:
+        if entry.get("category") != JOURNAL_CATEGORY:
+            continue
+
+        ids = entry.get("ids") or {}
+        rating = entry.get("rating") or 0 if entry.get("status") != "removed" else 0
+
+        if entry.get("item_type") == "movie":
+            if _apply_movie_rating(snapshot, ids, rating):
+                applied += 1
+        elif entry.get("item_type") == "episode":
+            if _apply_episode_rating(snapshot, ids, entry.get("season"), entry.get("episode"), rating):
+                applied += 1
+
+    sync_state.set_synced_at(CATEGORY, _now_iso())
+    return {"pulled_applied": applied, "mode": "incremental"}
+
+
+def pull(snapshot):
+    since = sync_state.get_synced_at(CATEGORY)
+    if not since:
+        return _pull_full(snapshot)
+
+    journal = mdblist_api.fetch_journal(since=since)
+    if journal.get("requires_full_sync"):
+        return _pull_full(snapshot)
+
+    return _pull_incremental(snapshot, journal.get("entries", []))
