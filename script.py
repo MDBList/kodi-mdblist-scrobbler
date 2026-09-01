@@ -9,12 +9,16 @@ if _addon_root not in sys.path:
     sys.path.insert(0, _addon_root)
 
 try:
-    from resources.lib import oauth
-
-    if "disconnect" in sys.argv:
-        oauth.run_disconnect()
+    if "sync_now" in sys.argv:
+        from resources.lib import sync_orchestrator
+        sync_orchestrator.run(notify=True)
     else:
-        oauth.run_connect_flow()
+        from resources.lib import oauth
+
+        if "disconnect" in sys.argv:
+            oauth.run_disconnect()
+        else:
+            oauth.run_connect_flow()
 except Exception as e:
     xbmc.log("MDBList Scrobbler: script error - {}".format(e), level=xbmc.LOGERROR)
     import xbmcgui

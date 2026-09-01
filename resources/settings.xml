@@ -40,4 +40,18 @@
         <setting label="Save to Kodi library" type="bool" id="rating.save.kodi" default="true"/>
         <setting label="Save to MDBList" type="bool" id="rating.save.mdblist" default="false"/>
     </category>
+    <category label="Sync">
+        <setting label="Categories" type="lsep"/>
+        <setting label="Sync watched status (two-way)" type="bool" id="sync.watched.enabled" default="false"/>
+        <setting label="Sync ratings (two-way)" type="bool" id="sync.ratings.enabled" default="false"/>
+        <setting label="Sync library/collection status (Kodi to MDBList only)" type="bool" id="sync.collection.enabled" default="false"/>
+
+        <setting label="Triggers" type="lsep"/>
+        <setting label="Sync after library scan finishes" type="bool" id="sync.on_library_scan" default="true"/>
+        <setting label="Periodic sync interval (minutes)" type="number" id="sync.interval" default="360"/>
+
+        <setting label="Manual" type="lsep"/>
+        <setting label="Sync now" type="action" action="RunScript(service.mdblist-scrobbler,sync_now)"/>
+        <setting label="Last sync" id="sync_last_run" type="text" default="Never" enable="false"/>
+    </category>
 </settings>
