@@ -91,6 +91,59 @@ def build_snapshot():
     return snapshot
 
 
+MOVIE_RATING_PROPERTIES = ["uniqueid", "userrating"]
+EPISODE_RATING_PROPERTIES = ["season", "episode", "tvshowid", "userrating"]
+
+
+def build_ratings_snapshot():
+    """Lighter version of build_snapshot() for a frequent local ratings-only
+    poll (see sync_orchestrator.check_ratings_local): Kodi's native "Rate" UI
+    doesn't reliably announce VideoLibrary.OnUpdate the way marking watched
+    does (confirmed -- no notification arrives when rating through the video
+    info dialog), so there's no event to react to and this has to poll.
+    Skips playcount/lastplayed/dateadded/file entirely since ratings_sync
+    doesn't need them, keeping a frequent poll cheap. Same record/bucket
+    shape as build_snapshot() so it's a drop-in for ratings_sync.push()."""
+    snapshot = {"movie": {}, "episode": {}}
+
+    movies = jsonrpc_request("VideoLibrary.GetMovies", {"properties": MOVIE_RATING_PROPERTIES}).get("movies") or []
+    for movie in movies:
+        ids = fix_unique_ids(movie.get("uniqueid", {}), "movie")
+        if not ids:
+            continue
+        record = {
+            "dbtype": "movie",
+            "dbid": movie.get("movieid"),
+            "ids": ids,
+            "userrating": movie.get("userrating") or 0,
+        }
+        for provider, value in ids.items():
+            snapshot["movie"]["{}:{}".format(provider, value)] = record
+
+    show_ids_by_dbid = _tvshow_ids_by_dbid()
+
+    episodes = jsonrpc_request("VideoLibrary.GetEpisodes", {"properties": EPISODE_RATING_PROPERTIES}).get("episodes") or []
+    for episode in episodes:
+        show_ids = show_ids_by_dbid.get(episode.get("tvshowid"))
+        if not show_ids:
+            continue
+        season = episode.get("season")
+        episode_number = episode.get("episode")
+        record = {
+            "dbtype": "episode",
+            "dbid": episode.get("episodeid"),
+            "show_ids": show_ids,
+            "season": season,
+            "episode": episode_number,
+            "userrating": episode.get("userrating") or 0,
+        }
+        for provider, value in show_ids.items():
+            key = "{}:{}:{}:{}".format(provider, value, season, episode_number)
+            snapshot["episode"][key] = record
+
+    return snapshot
+
+
 def canonical_movie_key(ids):
     for provider in PROVIDER_PRIORITY:
         value = ids.get(provider)

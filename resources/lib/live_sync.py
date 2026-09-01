@@ -67,21 +67,28 @@ def handle_library_update(dbtype, dbid):
     if sync_orchestrator.is_running():
         # Very likely our own pull() applying remote state -- avoid an
         # immediate echo push of what we just pulled.
+        xbmc.log("MDBList Sync: live update for {}:{} skipped, a run is in progress".format(dbtype, dbid), level=xbmc.LOGDEBUG)
         return
 
     watched_enabled = _bool_setting("sync.watched.enabled")
     ratings_enabled = _bool_setting("sync.ratings.enabled")
     if not (watched_enabled or ratings_enabled):
+        xbmc.log("MDBList Sync: live update for {}:{} ignored, watched/ratings sync both disabled".format(dbtype, dbid), level=xbmc.LOGDEBUG)
         return
 
     record = _movie_record(dbid) if dbtype == "movie" else _episode_record(dbid)
     if not record:
+        xbmc.log("MDBList Sync: live update for {}:{} - no supported ids, skipping".format(dbtype, dbid), level=xbmc.LOGDEBUG)
         return
+
+    xbmc.log("MDBList Sync: live update for {}:{} record={}".format(dbtype, dbid, record), level=xbmc.LOGDEBUG)
 
     try:
         if watched_enabled:
-            watched_sync.push_single(record)
+            result = watched_sync.push_single(record)
+            xbmc.log("MDBList Sync: live watched push_single result={}".format(result), level=xbmc.LOGDEBUG)
         if ratings_enabled:
-            ratings_sync.push_single(record)
+            result = ratings_sync.push_single(record)
+            xbmc.log("MDBList Sync: live ratings push_single result={}".format(result), level=xbmc.LOGDEBUG)
     except MDBListApiError as exception:
         xbmc.log("MDBList Sync: live push failed - {}".format(exception), level=xbmc.LOGDEBUG)

@@ -14,6 +14,11 @@ from resources.lib.timer import Timer
 # from being exposed as a setting.
 SYNC_INTERVAL_MINUTES = 1440
 ACTIVITY_CHECK_INTERVAL_MINUTES = 10
+# Kodi's native "Rate" UI doesn't reliably announce VideoLibrary.OnUpdate the
+# way marking watched does (confirmed by log inspection), so ratings have no
+# event to react to and need an actual poll -- kept cheap via
+# library_snapshot.build_ratings_snapshot(), which only fetches uniqueid+userrating.
+RATINGS_CHECK_INTERVAL_MINUTES = 2
 
 
 class MainMonitor(xbmc.Monitor):
@@ -23,6 +28,7 @@ class MainMonitor(xbmc.Monitor):
         self.player_monitor = PlayerMonitor()
         self.sync_timer = None
         self.activity_timer = None
+        self.ratings_timer = None
 
         try:
             status = "Connected" if oauth.get_access_token() else "Not connected"
@@ -32,6 +38,7 @@ class MainMonitor(xbmc.Monitor):
 
         self.start_sync_timer()
         self.start_activity_timer()
+        self.start_ratings_timer()
         # Catch-up sync shortly after the service starts, in addition to the
         # periodic timer and the library-scan hooks below.
         sync_orchestrator.run_async()
@@ -66,6 +73,18 @@ class MainMonitor(xbmc.Monitor):
     def on_activity_timer(self):
         sync_orchestrator.check_activity_async()
 
+    def start_ratings_timer(self):
+        self.stop_ratings_timer()
+        self.ratings_timer = Timer(RATINGS_CHECK_INTERVAL_MINUTES * 60, self.on_ratings_timer)
+        self.ratings_timer.start()
+
+    def stop_ratings_timer(self):
+        if self.ratings_timer and self.ratings_timer.is_alive():
+            self.ratings_timer.stop()
+
+    def on_ratings_timer(self):
+        sync_orchestrator.check_ratings_local_async()
+
     def onScanFinished(self, library):
         if library == "video" and self._bool_setting("sync.on_library_scan", True):
             sync_orchestrator.run_async()
@@ -78,6 +97,8 @@ class MainMonitor(xbmc.Monitor):
         if method != "VideoLibrary.OnUpdate":
             return
 
+        xbmc.log("MDBList Sync: VideoLibrary.OnUpdate sender={} data={}".format(sender, data), level=xbmc.LOGDEBUG)
+
         try:
             payload = json.loads(data)
         except (ValueError, TypeError):
@@ -87,6 +108,7 @@ class MainMonitor(xbmc.Monitor):
         dbtype = item.get("type")
         dbid = item.get("id")
         if dbtype not in ("movie", "episode") or dbid in (None, -1):
+            xbmc.log("MDBList Sync: OnUpdate item filtered out (type={} id={})".format(dbtype, dbid), level=xbmc.LOGDEBUG)
             return
 
         live_sync.handle_library_update(dbtype, dbid)

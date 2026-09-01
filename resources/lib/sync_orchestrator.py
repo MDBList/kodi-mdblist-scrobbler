@@ -14,6 +14,12 @@ _lock = threading.Lock()
 # so there's nothing for us to pull in reaction to it changing.
 WATCHED_ACTIVITY_KEYS = ("watched_at", "season_watched_at", "episode_watched_at")
 RATING_ACTIVITY_KEYS = ("rated_at",)
+# Removals (unwatch, unrate) do NOT bump the per-bucket timestamps above --
+# confirmed against api.mdblist's SyncWatchedRemove/SyncRatingsRemove, which
+# only clear the per-item state and separately bump journal_at via
+# _bulk_write_journal. Without checking journal_at too, an unwatch/unrate
+# never trips this gate and pull() never runs for it.
+JOURNAL_ACTIVITY_KEYS = ("journal_at",)
 
 
 def is_running():
@@ -129,8 +135,12 @@ def check_activity(notify=False):
             return None
 
         seen = sync_state.get_last_activities_seen()
-        watched_changed = watched_enabled and _bucket_advanced(seen, activities, WATCHED_ACTIVITY_KEYS)
-        ratings_changed = ratings_enabled and _bucket_advanced(seen, activities, RATING_ACTIVITY_KEYS)
+        # journal_at covers removals for both categories (it doesn't say which),
+        # so an advance there is checked as a possible change for whichever
+        # categories are enabled, same as an advance in their own bucket.
+        journal_advanced = _bucket_advanced(seen, activities, JOURNAL_ACTIVITY_KEYS)
+        watched_changed = watched_enabled and (_bucket_advanced(seen, activities, WATCHED_ACTIVITY_KEYS) or journal_advanced)
+        ratings_changed = ratings_enabled and (_bucket_advanced(seen, activities, RATING_ACTIVITY_KEYS) or journal_advanced)
 
         sync_state.set_last_activities_seen(activities)
 
@@ -161,6 +171,46 @@ def check_activity(notify=False):
         _lock.release()
 
 
+def check_ratings_local(notify=False):
+    """Frequent local ratings-only poll. Kodi's native "Rate" UI (video info
+    dialog) does not reliably announce VideoLibrary.OnUpdate the way marking
+    watched does -- confirmed by log inspection, no notification arrives for
+    a rating made that way -- so the live listener alone can't catch it.
+    Uses library_snapshot.build_ratings_snapshot(), a much lighter query than
+    the full snapshot (no playcount/lastplayed/dateadded/file), so polling
+    this frequently is cheap. Push-only, same as the live listener; pull is
+    still handled by check_activity()."""
+    if not _lock.acquire(blocking=False):
+        xbmc.log("MDBList Sync: ratings check skipped, a run is already in progress", level=xbmc.LOGDEBUG)
+        return None
+
+    try:
+        if not _bool_setting("sync.ratings.enabled"):
+            return None
+
+        snapshot = library_snapshot.build_ratings_snapshot()
+
+        try:
+            result = ratings_sync.push(snapshot)
+        except MDBListApiError as exception:
+            xbmc.log("MDBList Sync: local ratings push failed - {}".format(exception), level=xbmc.LOGERROR)
+            if notify:
+                _notify("Sync failed: {}".format(str(exception)[:60]), error=True)
+            return None
+
+        if not (result.get("pushed_add") or result.get("pushed_remove")):
+            return None
+
+        summary = {"ratings_push": result}
+        _record_summary(summary)
+        if notify:
+            _notify("Sync complete")
+
+        return summary
+    finally:
+        _lock.release()
+
+
 def _summary_text(summary):
     import datetime
     parts = []
@@ -182,5 +232,11 @@ def run_async(notify=False):
 
 def check_activity_async(notify=False):
     thread = threading.Thread(target=check_activity, kwargs={"notify": notify})
+    thread.daemon = True
+    thread.start()
+
+
+def check_ratings_local_async(notify=False):
+    thread = threading.Thread(target=check_ratings_local, kwargs={"notify": notify})
     thread.daemon = True
     thread.start()
