@@ -11,6 +11,9 @@ from resources.lib.timer import Timer
 MIN_SYNC_INTERVAL_MINUTES = 5
 DEFAULT_SYNC_INTERVAL_MINUTES = 360
 
+MIN_ACTIVITY_CHECK_INTERVAL_MINUTES = 5
+DEFAULT_ACTIVITY_CHECK_INTERVAL_MINUTES = 10
+
 
 class MainMonitor(xbmc.Monitor):
     def __init__(self):
@@ -18,6 +21,7 @@ class MainMonitor(xbmc.Monitor):
 
         self.player_monitor = PlayerMonitor()
         self.sync_timer = None
+        self.activity_timer = None
 
         try:
             status = "Connected" if oauth.get_access_token() else "Not connected"
@@ -26,6 +30,7 @@ class MainMonitor(xbmc.Monitor):
             pass
 
         self.start_sync_timer()
+        self.start_activity_timer()
         # Catch-up sync shortly after the service starts, in addition to the
         # periodic timer and the library-scan hooks below.
         sync_orchestrator.run_async()
@@ -58,6 +63,22 @@ class MainMonitor(xbmc.Monitor):
     def on_sync_timer(self):
         sync_orchestrator.run_async()
 
+    def start_activity_timer(self):
+        self.stop_activity_timer()
+        interval_minutes = max(
+            self._int_setting("sync.check_interval", DEFAULT_ACTIVITY_CHECK_INTERVAL_MINUTES),
+            MIN_ACTIVITY_CHECK_INTERVAL_MINUTES,
+        )
+        self.activity_timer = Timer(interval_minutes * 60, self.on_activity_timer)
+        self.activity_timer.start()
+
+    def stop_activity_timer(self):
+        if self.activity_timer and self.activity_timer.is_alive():
+            self.activity_timer.stop()
+
+    def on_activity_timer(self):
+        sync_orchestrator.check_activity_async()
+
     def onScanFinished(self, library):
         if library == "video" and self._bool_setting("sync.on_library_scan", True):
             sync_orchestrator.run_async()
@@ -86,3 +107,4 @@ class MainMonitor(xbmc.Monitor):
     def onSettingsChanged(self):
         self.player_monitor.load_settings()
         self.start_sync_timer()
+        self.start_activity_timer()

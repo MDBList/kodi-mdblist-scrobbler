@@ -48,7 +48,8 @@
 
         <setting label="Triggers" type="lsep"/>
         <setting label="Sync after library scan finishes" type="bool" id="sync.on_library_scan" default="true"/>
-        <setting label="Periodic sync interval (minutes)" type="number" id="sync.interval" default="360"/>
+        <setting label="Check MDBList for changes every (minutes)" type="number" id="sync.check_interval" default="10"/>
+        <setting label="Full sync interval (minutes)" type="number" id="sync.interval" default="360"/>
 
         <setting label="Manual" type="lsep"/>
         <setting label="Sync now" type="action" action="RunScript(service.mdblist-scrobbler,sync_now)"/>

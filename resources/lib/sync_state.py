@@ -68,6 +68,17 @@ def update_known_item(category: str, key: str, item):
     _write(data)
 
 
+def get_last_activities_seen():
+    activities = _load().get("last_activities_seen")
+    return activities if isinstance(activities, dict) else {}
+
+
+def set_last_activities_seen(activities: dict):
+    data = _load()
+    data["last_activities_seen"] = activities
+    _write(data)
+
+
 def get_last_sync_summary():
     return _load().get("last_run")
 
