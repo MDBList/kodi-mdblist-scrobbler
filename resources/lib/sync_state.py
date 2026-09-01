@@ -55,6 +55,19 @@ def set_known_items(category: str, items: dict):
     _write(data)
 
 
+def update_known_item(category: str, key: str, item):
+    """Patch a single key in place rather than replacing the whole known_items
+    dict -- for a single-item live push (see push_single in watched_sync.py /
+    ratings_sync.py), which only ever examines one item, not the full library."""
+    data = _load()
+    bucket = data.setdefault(category, {}).setdefault("known_items", {})
+    if item is None:
+        bucket.pop(key, None)
+    else:
+        bucket[key] = item
+    _write(data)
+
+
 def get_last_sync_summary():
     return _load().get("last_run")
 

@@ -1,7 +1,9 @@
+import json
+
 import xbmc
 import xbmcaddon
 
-from resources.lib import oauth, sync_orchestrator
+from resources.lib import live_sync, oauth, sync_orchestrator
 from resources.lib.player_monitor import PlayerMonitor
 from resources.lib.timer import Timer
 
@@ -63,6 +65,23 @@ class MainMonitor(xbmc.Monitor):
     def onCleanFinished(self, library):
         if library == "video" and self._bool_setting("sync.on_library_scan", True):
             sync_orchestrator.run_async()
+
+    def onNotification(self, sender, method, data):
+        if method != "VideoLibrary.OnUpdate":
+            return
+
+        try:
+            payload = json.loads(data)
+        except (ValueError, TypeError):
+            return
+
+        item = payload.get("item") or {}
+        dbtype = item.get("type")
+        dbid = item.get("id")
+        if dbtype not in ("movie", "episode") or dbid in (None, -1):
+            return
+
+        live_sync.handle_library_update(dbtype, dbid)
 
     def onSettingsChanged(self):
         self.player_monitor.load_settings()

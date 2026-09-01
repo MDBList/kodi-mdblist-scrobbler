@@ -6,8 +6,8 @@ import xbmc
 import xbmcaddon
 import xbmcgui
 
-from resources.lib import oauth
-from resources.lib.mdblist_api import MDBListApiError, push_sync_items
+from resources.lib import oauth, ratings_sync
+from resources.lib.mdblist_api import MDBListApiError
 from resources.lib.timer import Timer
 from resources.lib.utils import jsonrpc_request, fix_unique_ids
 
@@ -536,7 +536,7 @@ class PlayerMonitor(xbmc.Player):
             if not movie_ids:
                 xbmc.log("MDBList Scrobbler: Cannot rate movie on MDBList, no supported IDs", level=xbmc.LOGWARNING)
                 return False
-            payload = {"movies": [{"ids": movie_ids, "rating": rating}]}
+            record = {"dbtype": "movie", "ids": movie_ids, "userrating": rating}
         elif media_type == "episode":
             show_ids = fix_unique_ids(self.video_info.get("tvshow", {}).get("uniqueid", {}), "episode")
             if not show_ids:
@@ -544,20 +544,16 @@ class PlayerMonitor(xbmc.Player):
             if not show_ids:
                 xbmc.log("MDBList Scrobbler: Cannot rate episode on MDBList, no supported show IDs", level=xbmc.LOGWARNING)
                 return False
-            payload = {
-                "shows": [{
-                    "ids": show_ids,
-                    "seasons": [{
-                        "number": self.video_info.get("season"),
-                        "episodes": [{"number": self.video_info.get("episode"), "rating": rating}]
-                    }]
-                }]
+            record = {
+                "dbtype": "episode", "show_ids": show_ids,
+                "season": self.video_info.get("season"), "episode": self.video_info.get("episode"),
+                "userrating": rating,
             }
         else:
             return False
 
         try:
-            push_sync_items("/sync/ratings", payload)
+            ratings_sync.push_single(record)
             return True
         except MDBListApiError as exception:
             xbmc.log("MDBList Scrobbler: MDBList rating request failed - {}".format(str(exception)), level=xbmc.LOGERROR)

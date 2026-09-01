@@ -10,6 +10,13 @@ from resources.lib.mdblist_api import MDBListApiError
 _lock = threading.Lock()
 
 
+def is_running():
+    """True while a full run() is in progress -- used by the live
+    VideoLibrary.OnUpdate listener to skip reacting to library writes that
+    are pull() applying remote state, not a real local/native-UI change."""
+    return _lock.locked()
+
+
 def _addon():
     return xbmcaddon.Addon()
 

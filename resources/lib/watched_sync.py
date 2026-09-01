@@ -27,25 +27,36 @@ def _normalize_ts(value):
 
 # --- push: Kodi -> MDBList -----------------------------------------------
 
+def _movie_item(movie):
+    return {"type": "movie", "ids": movie["ids"], "watched_at": _to_api_datetime(movie["lastplayed"])}
+
+
+def _episode_item(episode):
+    return {
+        "type": "episode", "show_ids": episode["show_ids"],
+        "season": episode["season"], "episode": episode["episode"],
+        "watched_at": _to_api_datetime(episode["lastplayed"]),
+    }
+
+
+def _canonical_key(record):
+    if record["dbtype"] == "movie":
+        return library_snapshot.canonical_movie_key(record["ids"])
+    return library_snapshot.canonical_episode_key(record["show_ids"], record["season"], record["episode"])
+
+
 def _current_watched_items(snapshot):
     items = {}
     for movie in library_snapshot.iter_movies(snapshot):
         if movie["playcount"] > 0:
             key = library_snapshot.canonical_movie_key(movie["ids"])
             if key:
-                items[key] = {
-                    "type": "movie", "ids": movie["ids"],
-                    "watched_at": _to_api_datetime(movie["lastplayed"]),
-                }
+                items[key] = _movie_item(movie)
     for episode in library_snapshot.iter_episodes(snapshot):
         if episode["playcount"] > 0:
             key = library_snapshot.canonical_episode_key(episode["show_ids"], episode["season"], episode["episode"])
             if key:
-                items[key] = {
-                    "type": "episode", "show_ids": episode["show_ids"],
-                    "season": episode["season"], "episode": episode["episode"],
-                    "watched_at": _to_api_datetime(episode["lastplayed"]),
-                }
+                items[key] = _episode_item(episode)
     return items
 
 
@@ -92,6 +103,34 @@ def push(snapshot):
 
     sync_state.set_known_items(CATEGORY, current)
     return {"pushed_add": len(to_add), "pushed_remove": len(to_remove)}
+
+
+def push_single(record):
+    """Immediate push for one item, triggered by a live VideoLibrary.OnUpdate
+    notification (Kodi's native "mark as watched"/"mark as unwatched", not
+    just our own scrobble flow). Patches sync_state in place instead of
+    replacing it, since this only ever examines one item, not the full
+    library -- see sync_state.update_known_item."""
+    key = _canonical_key(record)
+    if not key:
+        return None
+
+    known_item = sync_state.get_known_items(CATEGORY).get(key)
+    is_watched = record["playcount"] > 0
+
+    if is_watched:
+        item = _movie_item(record) if record["dbtype"] == "movie" else _episode_item(record)
+        if known_item and known_item.get("watched_at") == item.get("watched_at"):
+            return None
+        _push_add([item])
+        sync_state.update_known_item(CATEGORY, key, item)
+        return {"pushed_add": 1}
+
+    if not known_item:
+        return None
+    _push_remove([known_item])
+    sync_state.update_known_item(CATEGORY, key, None)
+    return {"pushed_remove": 1}
 
 
 # --- pull: MDBList -> Kodi -------------------------------------------------

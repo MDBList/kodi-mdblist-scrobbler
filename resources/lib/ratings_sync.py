@@ -15,22 +15,36 @@ def _now_iso():
 
 # --- push: Kodi -> MDBList -----------------------------------------------
 
+def _movie_item(movie):
+    return {"type": "movie", "ids": movie["ids"], "rating": movie["userrating"]}
+
+
+def _episode_item(episode):
+    return {
+        "type": "episode", "show_ids": episode["show_ids"],
+        "season": episode["season"], "episode": episode["episode"],
+        "rating": episode["userrating"],
+    }
+
+
+def _canonical_key(record):
+    if record["dbtype"] == "movie":
+        return library_snapshot.canonical_movie_key(record["ids"])
+    return library_snapshot.canonical_episode_key(record["show_ids"], record["season"], record["episode"])
+
+
 def _current_rated_items(snapshot):
     items = {}
     for movie in library_snapshot.iter_movies(snapshot):
         if movie["userrating"] > 0:
             key = library_snapshot.canonical_movie_key(movie["ids"])
             if key:
-                items[key] = {"type": "movie", "ids": movie["ids"], "rating": movie["userrating"]}
+                items[key] = _movie_item(movie)
     for episode in library_snapshot.iter_episodes(snapshot):
         if episode["userrating"] > 0:
             key = library_snapshot.canonical_episode_key(episode["show_ids"], episode["season"], episode["episode"])
             if key:
-                items[key] = {
-                    "type": "episode", "show_ids": episode["show_ids"],
-                    "season": episode["season"], "episode": episode["episode"],
-                    "rating": episode["userrating"],
-                }
+                items[key] = _episode_item(episode)
     return items
 
 
@@ -74,6 +88,33 @@ def push(snapshot):
 
     sync_state.set_known_items(CATEGORY, current)
     return {"pushed_add": len(to_add), "pushed_remove": len(to_remove)}
+
+
+def push_single(record):
+    """Immediate push for one item -- see watched_sync.push_single. Used both
+    by the live VideoLibrary.OnUpdate listener (Kodi's native rate dialog) and
+    by player_monitor's own rating-prompt flow, so the two don't duplicate
+    payload-building logic or double-push the same rating."""
+    key = _canonical_key(record)
+    if not key:
+        return None
+
+    known_item = sync_state.get_known_items(CATEGORY).get(key)
+    rating = record["userrating"]
+
+    if rating > 0:
+        item = _movie_item(record) if record["dbtype"] == "movie" else _episode_item(record)
+        if known_item and known_item.get("rating") == rating:
+            return None
+        _push_add([item])
+        sync_state.update_known_item(CATEGORY, key, item)
+        return {"pushed_add": 1}
+
+    if not known_item:
+        return None
+    _push_remove([known_item])
+    sync_state.update_known_item(CATEGORY, key, None)
+    return {"pushed_remove": 1}
 
 
 # --- pull: MDBList -> Kodi ---------------------------------------------------
