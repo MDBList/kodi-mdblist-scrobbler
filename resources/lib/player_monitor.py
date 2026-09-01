@@ -472,8 +472,8 @@ class PlayerMonitor(xbmc.Player):
             return False
 
         if library_id in (None, -1):
-            if not self.get_bool_setting("rating.save.mdblist", False):
-                xbmc.log("MDBList Scrobbler: Skipping rating prompt, item is not in Kodi library and MDBList rating disabled", level=xbmc.LOGDEBUG)
+            if not self.get_bool_setting("sync.ratings.enabled", False):
+                xbmc.log("MDBList Scrobbler: Skipping rating prompt, item is not in Kodi library and ratings sync is disabled", level=xbmc.LOGDEBUG)
                 return False
             xbmc.log("MDBList Scrobbler: Item not in Kodi library, Kodi rating will be skipped but MDBList rating can proceed", level=xbmc.LOGDEBUG)
 
@@ -526,7 +526,7 @@ class PlayerMonitor(xbmc.Player):
             return False
 
     def save_mdblist_rating(self, rating: int):
-        if not self.get_bool_setting("rating.save.mdblist", False):
+        if not self.get_bool_setting("sync.ratings.enabled", False):
             return False
 
         media_type = self.video_info.get("type")

@@ -8,11 +8,12 @@ from resources.lib.player_monitor import PlayerMonitor
 from resources.lib.timer import Timer
 
 
-MIN_SYNC_INTERVAL_MINUTES = 5
-DEFAULT_SYNC_INTERVAL_MINUTES = 360
-
-MIN_ACTIVITY_CHECK_INTERVAL_MINUTES = 5
-DEFAULT_ACTIVITY_CHECK_INTERVAL_MINUTES = 10
+# Fixed, not user-configurable -- a too-low interval here is a footgun (needless
+# load on both the Kodi library JSON-RPC calls and the MDBList API), and there's
+# a single correct answer for "how often should this poll" that doesn't benefit
+# from being exposed as a setting.
+SYNC_INTERVAL_MINUTES = 1440
+ACTIVITY_CHECK_INTERVAL_MINUTES = 10
 
 
 class MainMonitor(xbmc.Monitor):
@@ -41,19 +42,9 @@ class MainMonitor(xbmc.Monitor):
         except Exception:
             return default
 
-    def _int_setting(self, setting_id, default=0):
-        try:
-            return xbmcaddon.Addon().getSettings().getInt(setting_id)
-        except Exception:
-            return default
-
     def start_sync_timer(self):
         self.stop_sync_timer()
-        interval_minutes = max(
-            self._int_setting("sync.interval", DEFAULT_SYNC_INTERVAL_MINUTES),
-            MIN_SYNC_INTERVAL_MINUTES,
-        )
-        self.sync_timer = Timer(interval_minutes * 60, self.on_sync_timer)
+        self.sync_timer = Timer(SYNC_INTERVAL_MINUTES * 60, self.on_sync_timer)
         self.sync_timer.start()
 
     def stop_sync_timer(self):
@@ -65,11 +56,7 @@ class MainMonitor(xbmc.Monitor):
 
     def start_activity_timer(self):
         self.stop_activity_timer()
-        interval_minutes = max(
-            self._int_setting("sync.check_interval", DEFAULT_ACTIVITY_CHECK_INTERVAL_MINUTES),
-            MIN_ACTIVITY_CHECK_INTERVAL_MINUTES,
-        )
-        self.activity_timer = Timer(interval_minutes * 60, self.on_activity_timer)
+        self.activity_timer = Timer(ACTIVITY_CHECK_INTERVAL_MINUTES * 60, self.on_activity_timer)
         self.activity_timer.start()
 
     def stop_activity_timer(self):
@@ -106,5 +93,3 @@ class MainMonitor(xbmc.Monitor):
 
     def onSettingsChanged(self):
         self.player_monitor.load_settings()
-        self.start_sync_timer()
-        self.start_activity_timer()

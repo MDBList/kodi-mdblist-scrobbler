@@ -38,7 +38,7 @@
 
         <setting label="Save rating to" type="lsep"/>
         <setting label="Save to Kodi library" type="bool" id="rating.save.kodi" default="true"/>
-        <setting label="Save to MDBList" type="bool" id="rating.save.mdblist" default="false"/>
+        <!-- Saving to MDBList is controlled by "Sync ratings" in the Sync category, not a separate toggle here. -->
     </category>
     <category label="Sync">
         <setting label="Categories" type="lsep"/>
@@ -48,8 +48,6 @@
 
         <setting label="Triggers" type="lsep"/>
         <setting label="Sync after library scan finishes" type="bool" id="sync.on_library_scan" default="true"/>
-        <setting label="Check MDBList for changes every (minutes)" type="number" id="sync.check_interval" default="10"/>
-        <setting label="Full sync interval (minutes)" type="number" id="sync.interval" default="360"/>
 
         <setting label="Manual" type="lsep"/>
         <setting label="Sync now" type="action" action="RunScript(service.mdblist-scrobbler,sync_now)"/>
