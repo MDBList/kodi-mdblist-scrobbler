@@ -1,3 +1,4 @@
+import datetime
 import json
 
 import xbmc
@@ -99,3 +100,43 @@ def fix_unique_ids(unique_ids: dict, media_type: str):
     filtered = {key: value for key, value in canonical.items() if key in allowed}
 
     return filtered
+
+
+def _local_utc_offset():
+    return datetime.datetime.now() - datetime.datetime.utcnow()
+
+
+def local_time_to_utc_iso(value):
+    """Kodi's lastplayed/dateadded are naive local-time strings
+    ('YYYY-MM-DD HH:MM:SS', no timezone info), while every MDBList API
+    timestamp is UTC. Comparing or sending the raw string as if it were
+    already UTC is wrong by the device's UTC offset -- confirmed as the
+    cause of a real bug: on a UTC+3 (EEST) system, a local lastplayed could
+    look "newer" than a UTC removal timestamp that actually happened later,
+    silently blocking a real remote unwatch from applying. Offset is
+    computed from the current moment, so a value from months ago under a
+    different DST offset can be off by up to an hour -- acceptable for sync
+    conflict-resolution purposes, unlike being off by a fixed multi-hour
+    offset on every single comparison.
+    """
+    if not value:
+        return None
+    try:
+        local_dt = datetime.datetime.strptime(value[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return (local_dt - _local_utc_offset()).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def utc_iso_to_local_time(value):
+    """Inverse of local_time_to_utc_iso -- convert a UTC timestamp from
+    MDBList into a naive local-time string suitable for writing back to
+    Kodi's lastplayed/dateadded fields."""
+    if not value:
+        return None
+    cleaned = value.replace("Z", "").replace("T", " ")[:19]
+    try:
+        utc_dt = datetime.datetime.strptime(cleaned, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return (utc_dt + _local_utc_offset()).strftime("%Y-%m-%d %H:%M:%S")

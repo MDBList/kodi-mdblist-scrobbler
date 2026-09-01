@@ -2,7 +2,7 @@ import datetime
 
 from resources.lib import library_snapshot, mdblist_api, sync_state
 from resources.lib.sync_payload import build_shows_payload, chunked
-from resources.lib.utils import jsonrpc_request
+from resources.lib.utils import jsonrpc_request, local_time_to_utc_iso, utc_iso_to_local_time
 
 CATEGORY = "watched"
 BATCH_SIZE = 100
@@ -13,13 +13,11 @@ def _now_iso():
 
 
 def _to_api_datetime(value):
-    return value.replace(" ", "T") if value else None
+    # Kodi's lastplayed is naive local time; MDBList expects UTC.
+    return local_time_to_utc_iso(value)
 
 
-def _normalize_ts(value):
-    """First 19 chars of either Kodi's 'YYYY-MM-DD HH:MM:SS' or the API's ISO
-    8601 timestamp, separator-normalized -- sortable as a plain string without
-    needing real datetime parsing/timezone handling."""
+def _remote_ts_normalized(value):
     if not value:
         return None
     return value.replace(" ", "T")[:19]
@@ -151,9 +149,14 @@ def _set_watched(record, playcount, lastplayed=None):
 def _apply_watched(record, status, remote_at):
     """Last-write-wins using Kodi's lastplayed vs the remote timestamp -- the
     one sync category where Kodi actually tracks a comparable local
-    timestamp, so real conflict resolution (not just remote-wins) applies."""
-    local_ts = _normalize_ts(record.get("lastplayed"))
-    remote_ts = _normalize_ts(remote_at)
+    timestamp, so real conflict resolution (not just remote-wins) applies.
+    Both sides must be normalized to UTC before comparing -- Kodi's
+    lastplayed is naive local time, MDBList's timestamps are UTC; comparing
+    the raw strings is wrong by the device's UTC offset (confirmed bug: on a
+    UTC+3 system a local watch could look "newer" than a later UTC removal,
+    silently blocking the removal from ever applying)."""
+    local_ts = local_time_to_utc_iso(record.get("lastplayed"))
+    remote_ts = _remote_ts_normalized(remote_at)
 
     if status == "removed":
         if record["playcount"] <= 0:
@@ -166,7 +169,7 @@ def _apply_watched(record, status, remote_at):
     if record["playcount"] > 0 and local_ts and remote_ts and local_ts >= remote_ts:
         return False
 
-    new_lastplayed = remote_at.replace("T", " ")[:19] if remote_at else record.get("lastplayed")
+    new_lastplayed = utc_iso_to_local_time(remote_at) or record.get("lastplayed")
     _set_watched(record, playcount=max(record["playcount"], 1), lastplayed=new_lastplayed)
     return True
 

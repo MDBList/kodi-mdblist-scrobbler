@@ -1,5 +1,6 @@
 from resources.lib import library_snapshot, mdblist_api, sync_state
 from resources.lib.sync_payload import build_shows_payload, chunked
+from resources.lib.utils import local_time_to_utc_iso
 
 CATEGORY = "collection"
 BATCH_SIZE = 100
@@ -11,7 +12,8 @@ BATCH_SIZE = 100
 
 
 def _to_api_datetime(value):
-    return value.replace(" ", "T") if value else None
+    # Kodi's dateadded is naive local time; MDBList expects UTC.
+    return local_time_to_utc_iso(value)
 
 
 def _current_collected_items(snapshot):

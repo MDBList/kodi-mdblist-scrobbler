@@ -97,8 +97,6 @@ class MainMonitor(xbmc.Monitor):
         if method != "VideoLibrary.OnUpdate":
             return
 
-        xbmc.log("MDBList Sync: VideoLibrary.OnUpdate sender={} data={}".format(sender, data), level=xbmc.LOGDEBUG)
-
         try:
             payload = json.loads(data)
         except (ValueError, TypeError):
@@ -108,7 +106,6 @@ class MainMonitor(xbmc.Monitor):
         dbtype = item.get("type")
         dbid = item.get("id")
         if dbtype not in ("movie", "episode") or dbid in (None, -1):
-            xbmc.log("MDBList Sync: OnUpdate item filtered out (type={} id={})".format(dbtype, dbid), level=xbmc.LOGDEBUG)
             return
 
         live_sync.handle_library_update(dbtype, dbid)
