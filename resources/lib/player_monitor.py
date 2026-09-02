@@ -6,7 +6,7 @@ import xbmc
 import xbmcaddon
 import xbmcgui
 
-from resources.lib import oauth, ratings_sync
+from resources.lib import oauth, ratings_sync, sync_orchestrator
 from resources.lib.mdblist_api import MDBListApiError
 from resources.lib.timer import Timer
 from resources.lib.utils import jsonrpc_request, fix_unique_ids
@@ -552,12 +552,18 @@ class PlayerMonitor(xbmc.Player):
         else:
             return False
 
-        try:
-            ratings_sync.push_single(record)
-            return True
-        except MDBListApiError as exception:
-            xbmc.log("MDBList Scrobbler: MDBList rating request failed - {}".format(str(exception)), level=xbmc.LOGERROR)
-            return False
+        with sync_orchestrator.try_lock() as acquired:
+            if not acquired:
+                # A sync is in progress -- skip rather than race it. The
+                # rating still reaches MDBList via the next periodic push()
+                # backfill diff, so this isn't lost, just deferred.
+                return False
+            try:
+                result = ratings_sync.push_single(record)
+                return result is not False
+            except MDBListApiError as exception:
+                xbmc.log("MDBList Scrobbler: MDBList rating request failed - {}".format(str(exception)), level=xbmc.LOGERROR)
+                return False
 
     def prompt_for_rating(self, playback_event: str):
         if not self.should_prompt_for_rating(playback_event):

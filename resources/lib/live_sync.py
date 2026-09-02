@@ -64,24 +64,28 @@ def handle_library_update(dbtype, dbid):
     regardless of what caused it (our own scrobble/rating-prompt flow, Kodi's
     native "mark as watched"/rate dialog, another addon). Pushes just that one
     item instead of waiting for the next full sync run."""
-    if sync_orchestrator.is_running():
-        # Very likely our own pull() applying remote state -- avoid an
-        # immediate echo push of what we just pulled.
-        return
-
     watched_enabled = _bool_setting("sync.watched.enabled")
     ratings_enabled = _bool_setting("sync.ratings.enabled")
     if not (watched_enabled or ratings_enabled):
         return
 
-    record = _movie_record(dbid) if dbtype == "movie" else _episode_record(dbid)
-    if not record:
-        return
+    with sync_orchestrator.try_lock() as acquired:
+        if not acquired:
+            # A run()/check_activity()/check_ratings_local() is in progress --
+            # very likely applying remote state to this same item, so skip
+            # rather than echo it straight back. Held for this whole block,
+            # not just checked once, so a sync that starts mid-operation is
+            # caught too, not just one already running at entry.
+            return
 
-    try:
-        if watched_enabled:
-            watched_sync.push_single(record)
-        if ratings_enabled:
-            ratings_sync.push_single(record)
-    except MDBListApiError as exception:
-        xbmc.log("MDBList Sync: live push failed - {}".format(exception), level=xbmc.LOGDEBUG)
+        record = _movie_record(dbid) if dbtype == "movie" else _episode_record(dbid)
+        if not record:
+            return
+
+        try:
+            if watched_enabled:
+                watched_sync.push_single(record)
+            if ratings_enabled:
+                ratings_sync.push_single(record)
+        except MDBListApiError as exception:
+            xbmc.log("MDBList Sync: live push failed - {}".format(exception), level=xbmc.LOGDEBUG)

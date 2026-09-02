@@ -1,3 +1,4 @@
+import contextlib
 import threading
 
 import xbmc
@@ -23,10 +24,27 @@ JOURNAL_ACTIVITY_KEYS = ("journal_at",)
 
 
 def is_running():
-    """True while a run() or check_activity() is in progress -- used by the
-    live VideoLibrary.OnUpdate listener to skip reacting to library writes
-    that are pull() applying remote state, not a real local/native-UI change."""
+    """True while a run()/check_activity()/check_ratings_local() is in
+    progress. Prefer try_lock() over this where the caller goes on to do
+    real work afterward -- this alone is a check-then-act race (the state
+    can change the instant after it's read); try_lock() holds the lock for
+    the actual duration instead."""
     return _lock.locked()
+
+
+@contextlib.contextmanager
+def try_lock():
+    """Non-blocking acquire held for the duration of the `with` block, so a
+    caller like live_sync.handle_library_update can safely skip when a
+    run()/check_activity() is in progress *or* starts mid-operation -- unlike
+    a one-shot is_running() check, which only rules out overlap with a sync
+    that had already started at the moment of the check (confirmed race)."""
+    acquired = _lock.acquire(blocking=False)
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            _lock.release()
 
 
 def _addon():
@@ -61,7 +79,14 @@ def run(notify=False):
     the live listener missed, e.g. while Kodi was closed) and acts as a
     periodic full reconciliation. Safe to call from multiple trigger points
     (library scan, periodic timer, manual action) -- overlapping calls are
-    skipped rather than queued or run concurrently."""
+    skipped rather than queued or run concurrently.
+
+    Deliberately not gated behind a cheap "did anything change" pre-check:
+    every trigger that reaches this is already independently justified to
+    need a real snapshot -- a scan/clean finishing needs it for push()
+    regardless of remote state, and the 24h timer/manual action are meant to
+    be an unconditional reconciliation backstop, not something to skip based
+    on a signal that might itself be stale."""
     if not _lock.acquire(blocking=False):
         xbmc.log("MDBList Sync: run already in progress, skipping", level=xbmc.LOGDEBUG)
         return None
