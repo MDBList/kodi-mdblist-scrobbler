@@ -1,9 +1,7 @@
-from resources.lib import library_snapshot, mdblist_api, sync_state
-from resources.lib.sync_payload import build_shows_payload, chunked
+from resources.lib import library_snapshot, sync_payload
 from resources.lib.utils import local_time_to_utc_iso
 
 CATEGORY = "collection"
-BATCH_SIZE = 100
 
 # Kodi -> MDBList only: this reflects what's actually in the local library so
 # MDBList's collected status is accurate. There is deliberately no pull
@@ -39,29 +37,11 @@ def _current_collected_items(snapshot):
 
 
 def _push_add(items):
-    movies_payload = [{"ids": item["ids"], "collected_at": item["collected_at"]} for item in items if item["type"] == "movie"]
-    episode_entries = [
-        (item["show_ids"], item["season"], item["episode"], {"collected_at": item["collected_at"]})
-        for item in items if item["type"] == "episode"
-    ]
-
-    for batch in chunked(movies_payload, BATCH_SIZE):
-        mdblist_api.push_sync_items("/sync/collection", {"movies": batch})
-    for batch in chunked(episode_entries, BATCH_SIZE):
-        mdblist_api.push_sync_items("/sync/collection", {"shows": build_shows_payload(batch)})
+    sync_payload.push_items("/sync/collection", "collected_at", items)
 
 
 def _push_remove(items):
-    movies_payload = [{"ids": item["ids"]} for item in items if item["type"] == "movie"]
-    episode_entries = [
-        (item["show_ids"], item["season"], item["episode"], {})
-        for item in items if item["type"] == "episode"
-    ]
-
-    for batch in chunked(movies_payload, BATCH_SIZE):
-        mdblist_api.push_sync_items("/sync/collection/remove", {"movies": batch})
-    for batch in chunked(episode_entries, BATCH_SIZE):
-        mdblist_api.push_sync_items("/sync/collection/remove", {"shows": build_shows_payload(batch)})
+    sync_payload.push_items_remove("/sync/collection/remove", items)
 
 
 def push(snapshot):
@@ -69,16 +49,5 @@ def push(snapshot):
     anything that dropped out (file removed/library item deleted) since the
     last run is removed from MDBList's collection -- the "clean collection"
     step, mirroring script.trakt's collection sync."""
-    known = sync_state.get_known_items(CATEGORY)
     current = _current_collected_items(snapshot)
-
-    to_add = [item for key, item in current.items() if key not in known]
-    to_remove = [item for key, item in known.items() if key not in current]
-
-    if to_add:
-        _push_add(to_add)
-    if to_remove:
-        _push_remove(to_remove)
-
-    sync_state.set_known_items(CATEGORY, current)
-    return {"pushed_add": len(to_add), "pushed_remove": len(to_remove)}
+    return sync_payload.diff_and_reconcile(CATEGORY, current, _push_add, _push_remove)
