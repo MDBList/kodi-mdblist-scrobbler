@@ -10,8 +10,14 @@ if _addon_root not in sys.path:
 
 try:
     if "sync_now" in sys.argv:
-        from resources.lib import sync_orchestrator
-        sync_orchestrator.run(notify=True)
+        # Kodi runs RunScript in its own Python process, separate from the
+        # long-running service (service.py) -- calling sync_orchestrator.run()
+        # directly here would use a *different* module-level lock than the
+        # service's, so its is_running() check could never see this sync in
+        # progress (confirmed bug). Broadcast instead, so the running service
+        # picks this up and runs it in its own process/lock domain, same as
+        # the periodic timers and the live listener.
+        xbmc.executebuiltin("NotifyAll(service.mdblist-scrobbler,sync_now)")
     else:
         from resources.lib import oauth
 

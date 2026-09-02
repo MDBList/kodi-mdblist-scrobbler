@@ -3,7 +3,7 @@ import json
 import xbmc
 import xbmcaddon
 
-from resources.lib import live_sync, oauth, sync_orchestrator
+from resources.lib import live_sync, oauth, sync_orchestrator, sync_state
 from resources.lib.player_monitor import PlayerMonitor
 from resources.lib.timer import Timer
 
@@ -20,15 +20,22 @@ ACTIVITY_CHECK_INTERVAL_MINUTES = 10
 # library_snapshot.build_ratings_snapshot(), which only fetches uniqueid+userrating.
 RATINGS_CHECK_INTERVAL_MINUTES = 2
 
+ADDON_ID = "service.mdblist-scrobbler"
+
 
 class MainMonitor(xbmc.Monitor):
     def __init__(self):
         super().__init__()
 
         self.player_monitor = PlayerMonitor()
-        self.sync_timer = None
-        self.activity_timer = None
-        self.ratings_timer = None
+        self._timers = {}
+        # (name, interval_minutes, callback) -- one table instead of three
+        # near-identical start/stop/on-timer method trios.
+        self._timer_specs = (
+            ("sync", SYNC_INTERVAL_MINUTES, lambda: sync_orchestrator.run_async()),
+            ("activity", ACTIVITY_CHECK_INTERVAL_MINUTES, lambda: sync_orchestrator.check_activity_async()),
+            ("ratings", RATINGS_CHECK_INTERVAL_MINUTES, lambda: sync_orchestrator.check_ratings_local_async()),
+        )
 
         try:
             status = "Connected" if oauth.get_access_token() else "Not connected"
@@ -36,12 +43,25 @@ class MainMonitor(xbmc.Monitor):
         except Exception:
             pass
 
-        self.start_sync_timer()
-        self.start_activity_timer()
-        self.start_ratings_timer()
+        self._migrate_legacy_rating_setting()
+
+        for name, interval_minutes, callback in self._timer_specs:
+            self._start_timer(name, interval_minutes, callback)
+
         # Catch-up sync shortly after the service starts, in addition to the
-        # periodic timer and the library-scan hooks below.
+        # periodic timers and the library-scan hooks below.
         sync_orchestrator.run_async()
+
+    def _start_timer(self, name, interval_minutes, callback):
+        self._stop_timer(name)
+        timer = Timer(interval_minutes * 60, callback)
+        timer.start()
+        self._timers[name] = timer
+
+    def _stop_timer(self, name):
+        timer = self._timers.get(name)
+        if timer and timer.is_alive():
+            timer.stop()
 
     def _bool_setting(self, setting_id, default=False):
         try:
@@ -49,41 +69,24 @@ class MainMonitor(xbmc.Monitor):
         except Exception:
             return default
 
-    def start_sync_timer(self):
-        self.stop_sync_timer()
-        self.sync_timer = Timer(SYNC_INTERVAL_MINUTES * 60, self.on_sync_timer)
-        self.sync_timer.start()
-
-    def stop_sync_timer(self):
-        if self.sync_timer and self.sync_timer.is_alive():
-            self.sync_timer.stop()
-
-    def on_sync_timer(self):
-        sync_orchestrator.run_async()
-
-    def start_activity_timer(self):
-        self.stop_activity_timer()
-        self.activity_timer = Timer(ACTIVITY_CHECK_INTERVAL_MINUTES * 60, self.on_activity_timer)
-        self.activity_timer.start()
-
-    def stop_activity_timer(self):
-        if self.activity_timer and self.activity_timer.is_alive():
-            self.activity_timer.stop()
-
-    def on_activity_timer(self):
-        sync_orchestrator.check_activity_async()
-
-    def start_ratings_timer(self):
-        self.stop_ratings_timer()
-        self.ratings_timer = Timer(RATINGS_CHECK_INTERVAL_MINUTES * 60, self.on_ratings_timer)
-        self.ratings_timer.start()
-
-    def stop_ratings_timer(self):
-        if self.ratings_timer and self.ratings_timer.is_alive():
-            self.ratings_timer.stop()
-
-    def on_ratings_timer(self):
-        sync_orchestrator.check_ratings_local_async()
+    def _migrate_legacy_rating_setting(self):
+        """One-time migration: the old rating.save.mdblist toggle was folded
+        into sync.ratings.enabled (a settings.xml entry can be removed but
+        Kodi still lets you read the orphaned raw value from an existing
+        install's profile). Runs at most once ever, tracked in sync_state, so
+        it never fights a user's later explicit choice to turn sync off."""
+        if sync_state.get_migration_done("rating_save_mdblist"):
+            return
+        try:
+            legacy_value = xbmcaddon.Addon().getSetting("rating.save.mdblist")
+        except Exception:
+            legacy_value = ""
+        if str(legacy_value).lower() == "true":
+            try:
+                xbmcaddon.Addon().setSettingBool("sync.ratings.enabled", True)
+            except Exception:
+                pass
+        sync_state.set_migration_done("rating_save_mdblist")
 
     def onScanFinished(self, library):
         if library == "video" and self._bool_setting("sync.on_library_scan", True):
@@ -94,9 +97,20 @@ class MainMonitor(xbmc.Monitor):
             sync_orchestrator.run_async()
 
     def onNotification(self, sender, method, data):
-        if method != "VideoLibrary.OnUpdate":
-            return
+        if method == "VideoLibrary.OnUpdate":
+            self._handle_video_library_update(data)
+        elif sender == ADDON_ID and method.endswith("sync_now"):
+            # "Sync now" (script.py) broadcasts via NotifyAll rather than
+            # calling sync_orchestrator directly, since RunScript runs in a
+            # separate Python process from this service -- a direct call
+            # there would use a different module-level lock, so is_running()
+            # could never see it (confirmed bug). This runs it here instead,
+            # in the same process/lock as everything else. Kodi prefixes
+            # NotifyAll messages (typically "Other.<message>"), so match on
+            # suffix rather than the exact prefix.
+            sync_orchestrator.run_async(notify=True)
 
+    def _handle_video_library_update(self, data):
         try:
             payload = json.loads(data)
         except (ValueError, TypeError):
