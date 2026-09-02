@@ -150,22 +150,22 @@ def _apply_watched(record, status, remote_at):
     return True
 
 
-def _apply_movie_entry(snapshot, ids, status, action_at):
+def _apply_movie_entry(snapshot, ids, status, remote_at):
     """Returns (applied, canonical_key) -- the key (None if no local match)
     lets _pull_full track which locally-watched items the remote list
     actually mentioned, to reconcile removals for the rest."""
     match = library_snapshot.find_movie_match(snapshot, ids)
     if not match:
         return False, None
-    return _apply_watched(match, status, action_at), library_snapshot.canonical_movie_key(match["ids"])
+    return _apply_watched(match, status, remote_at), library_snapshot.canonical_movie_key(match["ids"])
 
 
-def _apply_episode_entry(snapshot, show_ids, season, episode, status, action_at):
+def _apply_episode_entry(snapshot, show_ids, season, episode, status, remote_at):
     match = library_snapshot.find_episode_match(snapshot, show_ids, season, episode)
     if not match:
         return False, None
     key = library_snapshot.canonical_episode_key(match["show_ids"], match["season"], match["episode"])
-    return _apply_watched(match, status, action_at), key
+    return _apply_watched(match, status, remote_at), key
 
 
 def _pull_full(snapshot, server_time):
@@ -238,14 +238,22 @@ def _pull_incremental(snapshot, entries, server_time):
 
         ids = entry.get("ids") or {}
         status = entry.get("status")
-        action_at = entry.get("action_at")
+        # value_at is the actual watched timestamp and is what conflict
+        # resolution must compare against -- but it's only ever set on
+        # add/active rows; a removal row has no "value" to speak of and
+        # only carries action_at (confirmed against api.mdblist's
+        # _remove_movies/_remove_shows/etc., which write the journal row
+        # with action_at but no value_at at all). Falling back to action_at
+        # there keeps last-write-wins working for removals instead of
+        # silently skipping the conflict check.
+        remote_at = entry.get("value_at") or entry.get("action_at")
 
         if entry.get("item_type") == "movie":
-            applied_ok, _key = _apply_movie_entry(snapshot, ids, status, action_at)
+            applied_ok, _key = _apply_movie_entry(snapshot, ids, status, remote_at)
             if applied_ok:
                 applied += 1
         elif entry.get("item_type") == "episode":
-            applied_ok, _key = _apply_episode_entry(snapshot, ids, entry.get("season"), entry.get("episode"), status, action_at)
+            applied_ok, _key = _apply_episode_entry(snapshot, ids, entry.get("season"), entry.get("episode"), status, remote_at)
             if applied_ok:
                 applied += 1
         # show/season-level rows have no directly writable Kodi field; skipped
