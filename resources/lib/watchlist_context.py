@@ -114,15 +114,23 @@ def run():
         notify("MDBList watchlist is disabled")
         return
 
-    mediatype, title, ids = selected_item_ids()
-    if not mediatype or not ids:
-        notify("No supported IDs found for this item", error=True)
-        return
-
     try:
+        mediatype, title, ids = selected_item_ids()
+        if not mediatype or not ids:
+            notify("No supported IDs found for this item", error=True)
+            return
+
         modify_watchlist(action, mediatype, ids)
     except MDBListApiError as exception:
         notify(str(exception)[:80], error=True)
+        return
+    except Exception as exception:
+        # Broad fallback matches watchlist_plugin.py's pattern, covering
+        # jsonrpc_request's JSONRPCError among other things -- keeps a Kodi
+        # query failure a graceful notification rather than an uncaught
+        # exception with no user-facing message.
+        xbmc.log("MDBList Watchlist: unexpected error - {}".format(exception), level=xbmc.LOGERROR)
+        notify("Watchlist error: {}".format(str(exception)[:60]), error=True)
         return
 
     verb = "Added to" if action == "add" else "Removed from"

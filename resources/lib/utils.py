@@ -32,6 +32,10 @@ def _normalize_id_value(key: str, value):
     return value
 
 
+class JSONRPCError(Exception):
+    pass
+
+
 def jsonrpc_request(method: str, params=None):
     request = {
         "jsonrpc": "2.0",
@@ -48,7 +52,14 @@ def jsonrpc_request(method: str, params=None):
     response_json = xbmc.executeJSONRPC(request_json)
     xbmc.log("Response from JSON-RPC request: {}".format(response_json), level=xbmc.LOGDEBUG)
 
-    return json.loads(response_json).get("result", {})
+    response = json.loads(response_json)
+    if "error" in response:
+        # Raise rather than fall back to {} -- callers that build a library
+        # snapshot for diff-based reconciliation treat an empty result as
+        # authoritative, so a real query failure needs to abort the sync
+        # run rather than look like "the library is empty".
+        raise JSONRPCError("{} failed: {}".format(method, response["error"]))
+    return response.get("result", {})
 
 
 def _coerce_unknown_id(unique_id, media_type: str):

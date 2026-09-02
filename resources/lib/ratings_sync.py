@@ -131,7 +131,7 @@ def _apply_episode_rating(snapshot, show_ids, season, episode, rating):
     return True
 
 
-def _pull_full(snapshot):
+def _pull_full(snapshot, server_time):
     # extended=None (full, not ids_only) -- MDBList's ids_only ratings response
     # only carries the episode's own tmdb id, not season/episode/show, so it
     # can't be matched against the Kodi library the way ids_only works for /sync/watched.
@@ -151,11 +151,11 @@ def _pull_full(snapshot):
         ):
             applied += 1
 
-    sync_state.set_synced_at(CATEGORY, _now_iso())
+    sync_state.set_synced_at(CATEGORY, server_time or _now_iso())
     return {"pulled_applied": applied, "mode": "full"}
 
 
-def _pull_incremental(snapshot, entries):
+def _pull_incremental(snapshot, entries, server_time):
     applied = 0
     for entry in entries:
         if entry.get("category") != JOURNAL_CATEGORY:
@@ -171,17 +171,19 @@ def _pull_incremental(snapshot, entries):
             if _apply_episode_rating(snapshot, ids, entry.get("season"), entry.get("episode"), rating):
                 applied += 1
 
-    sync_state.set_synced_at(CATEGORY, _now_iso())
+    sync_state.set_synced_at(CATEGORY, server_time or _now_iso())
     return {"pulled_applied": applied, "mode": "incremental"}
 
 
-def pull(snapshot):
+def pull(snapshot, server_time):
+    """server_time: see watched_sync.pull -- a server-provided watermark,
+    not the client's own clock."""
     since = sync_state.get_synced_at(CATEGORY)
     if not since:
-        return _pull_full(snapshot)
+        return _pull_full(snapshot, server_time)
 
     journal = mdblist_api.fetch_journal(since=since)
     if journal.get("requires_full_sync"):
-        return _pull_full(snapshot)
+        return _pull_full(snapshot, server_time)
 
-    return _pull_incremental(snapshot, journal.get("entries", []))
+    return _pull_incremental(snapshot, journal.get("entries", []), server_time)

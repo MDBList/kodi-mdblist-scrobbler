@@ -124,16 +124,13 @@ def _apply_watched(record, status, remote_at):
     """Last-write-wins using Kodi's lastplayed vs the remote timestamp -- the
     one sync category where Kodi actually tracks a comparable local
     timestamp, so real conflict resolution (not just remote-wins) applies.
-    Both sides must be normalized to UTC before comparing -- Kodi's
-    lastplayed is naive local time, MDBList's timestamps are UTC; comparing
-    the raw strings is wrong by the device's UTC offset (confirmed bug: on a
-    UTC+3 system a local watch could look "newer" than a later UTC removal,
-    silently blocking the removal from ever applying).
+    Both sides are normalized to UTC before comparing -- Kodi's lastplayed is
+    naive local time, MDBList's timestamps are UTC, so comparing the raw
+    strings would be off by the device's UTC offset.
 
     An exact tie (same second on both sides) is resolved the same way in
-    both branches below -- remote wins -- rather than local winning ties on
-    removal but losing them on activation, which was a real inconsistency
-    (both used to claim "last-write-wins" but disagreed on what a tie meant)."""
+    both branches below -- remote wins -- for one consistent tie-break rule
+    rather than local winning on removal but losing on activation."""
     local_ts = local_time_to_utc_iso(record.get("lastplayed"))
     remote_ts = _remote_ts_normalized(remote_at)
 
@@ -171,25 +168,34 @@ def _apply_episode_entry(snapshot, show_ids, season, episode, status, action_at)
     return _apply_watched(match, status, action_at), key
 
 
-def _pull_full(snapshot):
-    data = mdblist_api.fetch_sync_items("/sync/watched", extended="ids_only")
+def _pull_full(snapshot, server_time):
+    # extended=None (full, not ids_only): ids_only only exposes a movie's
+    # tmdb id (and an episode's parent show's tmdb id). A local item
+    # identified only by imdb/tvdb/trakt/mdblist couldn't be matched or ruled
+    # out below with that alone, and the removal-reconciliation loop needs to
+    # tell "not remotely watched" apart from "couldn't check" -- full mode
+    # gives every provider id.
+    data = mdblist_api.fetch_sync_items("/sync/watched", extended=None)
     applied = 0
     matched_keys = set()
 
     for entry in data.get("movies", []):
-        if not entry.get("tmdb"):
+        ids = (entry.get("movie") or {}).get("ids") or {}
+        if not ids:
             continue
-        applied_ok, key = _apply_movie_entry(snapshot, {"tmdb": entry["tmdb"]}, "active", entry.get("last_watched_at"))
+        applied_ok, key = _apply_movie_entry(snapshot, ids, "active", entry.get("last_watched_at"))
         if key:
             matched_keys.add(key)
         if applied_ok:
             applied += 1
 
     for entry in data.get("episodes", []):
-        if not entry.get("show"):
+        episode = entry.get("episode") or {}
+        show_ids = (episode.get("show") or {}).get("ids") or {}
+        if not show_ids:
             continue
         applied_ok, key = _apply_episode_entry(
-            snapshot, {"tmdb": entry["show"]}, entry.get("season"), entry.get("episode"),
+            snapshot, show_ids, episode.get("season"), episode.get("number"),
             "active", entry.get("last_watched_at"),
         )
         if key:
@@ -198,28 +204,33 @@ def _pull_full(snapshot):
             applied += 1
 
     # The full list above is authoritative: anything locally watched but not
-    # in it was unwatched remotely. Without this, a removal outside the
-    # journal's 30-day retention window -- which is what triggers this
-    # full-pull fallback in the first place -- could never reach Kodi, and
-    # the divergence would never self-correct since push()'s own diff sees
-    # the item as unchanged on both sides (confirmed bug).
+    # in it was unwatched remotely -- this is the fallback for when the
+    # journal's 30-day retention window has lapsed, so there's no incremental
+    # removal feed to rely on instead.
+    #
+    # The removal timestamp is the server-provided watermark, not "now": if
+    # the item was genuinely rewatched between when the server generated
+    # this snapshot and now, its local timestamp needs to be newer than
+    # server_time (not a later client-side "now") to correctly win the
+    # conflict-resolution check in _apply_watched.
+    removal_at = server_time or _now_iso()
     for movie in library_snapshot.iter_movies(snapshot):
         if movie["playcount"] > 0:
             key = library_snapshot.canonical_movie_key(movie["ids"])
-            if key and key not in matched_keys and _apply_watched(movie, "removed", _now_iso()):
+            if key and key not in matched_keys and _apply_watched(movie, "removed", removal_at):
                 applied += 1
 
     for episode in library_snapshot.iter_episodes(snapshot):
         if episode["playcount"] > 0:
             key = library_snapshot.canonical_episode_key(episode["show_ids"], episode["season"], episode["episode"])
-            if key and key not in matched_keys and _apply_watched(episode, "removed", _now_iso()):
+            if key and key not in matched_keys and _apply_watched(episode, "removed", removal_at):
                 applied += 1
 
-    sync_state.set_synced_at(CATEGORY, _now_iso())
+    sync_state.set_synced_at(CATEGORY, server_time or _now_iso())
     return {"pulled_applied": applied, "mode": "full"}
 
 
-def _pull_incremental(snapshot, entries):
+def _pull_incremental(snapshot, entries, server_time):
     applied = 0
     for entry in entries:
         if entry.get("category") != "watched":
@@ -239,17 +250,21 @@ def _pull_incremental(snapshot, entries):
                 applied += 1
         # show/season-level rows have no directly writable Kodi field; skipped
 
-    sync_state.set_synced_at(CATEGORY, _now_iso())
+    sync_state.set_synced_at(CATEGORY, server_time or _now_iso())
     return {"pulled_applied": applied, "mode": "incremental"}
 
 
-def pull(snapshot):
+def pull(snapshot, server_time):
+    """server_time: /sync/last_activities' own server_time -- a
+    safety-margined timestamp meant to be persisted as the next watermark,
+    rather than the device's own clock, which can drift and under-cover the
+    next incremental window."""
     since = sync_state.get_synced_at(CATEGORY)
     if not since:
-        return _pull_full(snapshot)
+        return _pull_full(snapshot, server_time)
 
     journal = mdblist_api.fetch_journal(since=since)
     if journal.get("requires_full_sync"):
-        return _pull_full(snapshot)
+        return _pull_full(snapshot, server_time)
 
-    return _pull_incremental(snapshot, journal.get("entries", []))
+    return _pull_incremental(snapshot, journal.get("entries", []), server_time)

@@ -7,6 +7,7 @@ import xbmcgui
 
 from resources.lib import collection_sync, library_snapshot, ratings_sync, sync_state, watched_sync
 from resources.lib.mdblist_api import MDBListApiError, fetch_last_activities
+from resources.lib.utils import JSONRPCError
 
 _lock = threading.Lock()
 
@@ -102,21 +103,31 @@ def run(notify=False):
                 _notify("Nothing to sync - enable Sync settings first")
             return None
 
-        snapshot = library_snapshot.build_snapshot()
         summary = {}
 
         try:
+            # snapshot/server_time fetch live inside this try: a failed Kodi
+            # library query must abort the whole run rather than let
+            # diff-based reconciliation treat an incomplete snapshot as "the
+            # library is empty" and push bulk removals.
+            snapshot = library_snapshot.build_snapshot()
+
+            # A server-provided watermark rather than the device's own clock,
+            # which can drift and under-cover the next incremental window.
+            # Fetched once per run and reused for both pulls below.
+            server_time = fetch_last_activities().get("server_time")
+
             if watched_enabled:
                 summary["watched_push"] = watched_sync.push(snapshot)
-                summary["watched_pull"] = watched_sync.pull(snapshot)
+                summary["watched_pull"] = watched_sync.pull(snapshot, server_time)
 
             if ratings_enabled:
                 summary["ratings_push"] = ratings_sync.push(snapshot)
-                summary["ratings_pull"] = ratings_sync.pull(snapshot)
+                summary["ratings_pull"] = ratings_sync.pull(snapshot, server_time)
 
             if collection_enabled:
                 summary["collection_push"] = collection_sync.push(snapshot)
-        except MDBListApiError as exception:
+        except (MDBListApiError, JSONRPCError) as exception:
             xbmc.log("MDBList Sync: run failed - {}".format(exception), level=xbmc.LOGERROR)
             if notify:
                 _notify("Sync failed: {}".format(str(exception)[:60]), error=True)
@@ -167,25 +178,33 @@ def check_activity(notify=False):
         watched_changed = watched_enabled and (_bucket_advanced(seen, activities, WATCHED_ACTIVITY_KEYS) or journal_advanced)
         ratings_changed = ratings_enabled and (_bucket_advanced(seen, activities, RATING_ACTIVITY_KEYS) or journal_advanced)
 
-        sync_state.set_last_activities_seen(activities)
-
         if not (watched_changed or ratings_changed):
+            # Advance the watermark only when there's nothing to follow up
+            # on. If a pull below fails, the watermark must stay put so this
+            # gets retried on the next check instead of silently marked
+            # "seen" -- see the matching comment further down.
+            sync_state.set_last_activities_seen(activities)
             xbmc.log("MDBList Sync: activity check found nothing new", level=xbmc.LOGDEBUG)
             return None
 
         snapshot = library_snapshot.build_snapshot()
         summary = {}
+        server_time = activities.get("server_time")
 
         try:
             if watched_changed:
-                summary["watched_pull"] = watched_sync.pull(snapshot)
+                summary["watched_pull"] = watched_sync.pull(snapshot, server_time)
             if ratings_changed:
-                summary["ratings_pull"] = ratings_sync.pull(snapshot)
-        except MDBListApiError as exception:
+                summary["ratings_pull"] = ratings_sync.pull(snapshot, server_time)
+        except (MDBListApiError, JSONRPCError) as exception:
             xbmc.log("MDBList Sync: activity-triggered pull failed - {}".format(exception), level=xbmc.LOGERROR)
             if notify:
                 _notify("Sync failed: {}".format(str(exception)[:60]), error=True)
             return None
+
+        # Only reached on success, so a failed pull above leaves the
+        # watermark where it was and gets retried on the next check.
+        sync_state.set_last_activities_seen(activities)
 
         _record_summary(summary)
         if notify:
@@ -213,11 +232,10 @@ def check_ratings_local(notify=False):
         if not _bool_setting("sync.ratings.enabled"):
             return None
 
-        snapshot = library_snapshot.build_ratings_snapshot()
-
         try:
+            snapshot = library_snapshot.build_ratings_snapshot()
             result = ratings_sync.push(snapshot)
-        except MDBListApiError as exception:
+        except (MDBListApiError, JSONRPCError) as exception:
             xbmc.log("MDBList Sync: local ratings push failed - {}".format(exception), level=xbmc.LOGERROR)
             if notify:
                 _notify("Sync failed: {}".format(str(exception)[:60]), error=True)
