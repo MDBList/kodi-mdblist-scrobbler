@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.1] - 2026-09-04
+
+* Fixed watched sync: a rewatch that only updated the watched date (without changing membership) could be silently dropped by the scheduled full sync, and would only reach MDBList via the live push on stop.
+
 ## [1.3.0] - 2026-09-02
 
 * Renamed from "MDBList Scrobbler" to "MDBList" -- the addon now does a lot more than scrobble.
