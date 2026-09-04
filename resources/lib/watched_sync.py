@@ -64,12 +64,16 @@ def _push_remove(items):
     sync_payload.push_items_remove("/sync/watched/remove", items)
 
 
+def _watched_at_changed(known_item, item):
+    return known_item.get("watched_at") != item.get("watched_at")
+
+
 def push(snapshot):
-    """Backfill/membership diff only -- a rewatch that updates lastplayed
-    without changing membership is already pushed live via the /scrobble/stop
-    event, so this doesn't need ratings_sync's extra "value changed" check."""
+    """Membership diff, plus a value-changed check on watched_at so a rewatch
+    that only updates lastplayed (membership unchanged) is still re-pushed by
+    the full diff, not just by the live push from /scrobble/stop."""
     current = _current_watched_items(snapshot)
-    return sync_payload.diff_and_reconcile(CATEGORY, current, _push_add, _push_remove)
+    return sync_payload.diff_and_reconcile(CATEGORY, current, _push_add, _push_remove, value_changed=_watched_at_changed)
 
 
 def push_single(record):
