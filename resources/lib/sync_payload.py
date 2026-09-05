@@ -1,6 +1,6 @@
 from collections import OrderedDict
 
-from resources.lib import mdblist_api, sync_state
+from resources.lib import library_snapshot, mdblist_api, sync_state
 
 BATCH_SIZE = 100
 
@@ -38,50 +38,82 @@ def chunked(items, size=100):
         yield items[i:i + size]
 
 
-def push_items(endpoint, field_name, items):
+def _canonical_key_of(item):
+    if item.get("type") == "movie":
+        return library_snapshot.canonical_movie_key(item.get("ids") or {})
+    return library_snapshot.canonical_episode_key(item.get("show_ids") or {}, item.get("season"), item.get("episode"))
+
+
+def _persist_pushed_chunk(category, chunk):
+    upserts = {}
+    for item in chunk:
+        key = _canonical_key_of(item)
+        if key:
+            upserts[key] = item
+    if upserts:
+        sync_state.merge_known_items(category, upserts)
+
+
+def _persist_removed_chunk(category, chunk):
+    removed_keys = [key for key in (_canonical_key_of(item) for item in chunk) if key]
+    if removed_keys:
+        sync_state.merge_known_items(category, {}, removed_keys)
+
+
+def push_items(category, endpoint, field_name, items):
     """Shared push body for watched_sync/ratings_sync/collection_sync's
     _push_add: split by type, set `field_name` (watched_at/rating/
     collected_at) on each, chunk, POST to `endpoint`. The three call sites
-    were previously identical modulo that field name and endpoint string."""
-    movies_payload = [{"ids": item["ids"], field_name: item[field_name]} for item in items if item["type"] == "movie"]
-    episode_entries = [
-        (item["show_ids"], item["season"], item["episode"], {field_name: item[field_name]})
-        for item in items if item["type"] == "episode"
-    ]
+    were previously identical modulo that field name and endpoint string.
+    Persists each chunk's known-items state immediately after it pushes
+    successfully, so a later chunk's failure (e.g. hitting the write rate
+    limit) doesn't undo already-pushed progress."""
+    movie_items = [item for item in items if item["type"] == "movie"]
+    for batch in chunked(movie_items, BATCH_SIZE):
+        payload = [{"ids": item["ids"], field_name: item[field_name]} for item in batch]
+        mdblist_api.push_sync_items(endpoint, {"movies": payload})
+        _persist_pushed_chunk(category, batch)
 
-    for batch in chunked(movies_payload, BATCH_SIZE):
-        mdblist_api.push_sync_items(endpoint, {"movies": batch})
-    for batch in chunked(episode_entries, BATCH_SIZE):
-        mdblist_api.push_sync_items(endpoint, {"shows": build_shows_payload(batch)})
+    episode_items = [item for item in items if item["type"] == "episode"]
+    for batch in chunked(episode_items, BATCH_SIZE):
+        entries = [(item["show_ids"], item["season"], item["episode"], {field_name: item[field_name]}) for item in batch]
+        mdblist_api.push_sync_items(endpoint, {"shows": build_shows_payload(entries)})
+        _persist_pushed_chunk(category, batch)
 
 
-def push_items_remove(endpoint, items):
+def push_items_remove(category, endpoint, items):
     """Shared push body for the three modules' _push_remove -- identity only,
-    no value field."""
-    movies_payload = [{"ids": item["ids"]} for item in items if item["type"] == "movie"]
-    episode_entries = [
-        (item["show_ids"], item["season"], item["episode"], {})
-        for item in items if item["type"] == "episode"
-    ]
+    no value field. Persists each chunk's removal immediately after it
+    pushes successfully -- see push_items."""
+    movie_items = [item for item in items if item["type"] == "movie"]
+    for batch in chunked(movie_items, BATCH_SIZE):
+        payload = [{"ids": item["ids"]} for item in batch]
+        mdblist_api.push_sync_items(endpoint, {"movies": payload})
+        _persist_removed_chunk(category, batch)
 
-    for batch in chunked(movies_payload, BATCH_SIZE):
-        mdblist_api.push_sync_items(endpoint, {"movies": batch})
-    for batch in chunked(episode_entries, BATCH_SIZE):
-        mdblist_api.push_sync_items(endpoint, {"shows": build_shows_payload(batch)})
+    episode_items = [item for item in items if item["type"] == "episode"]
+    for batch in chunked(episode_items, BATCH_SIZE):
+        entries = [(item["show_ids"], item["season"], item["episode"], {}) for item in batch]
+        mdblist_api.push_sync_items(endpoint, {"shows": build_shows_payload(entries)})
+        _persist_removed_chunk(category, batch)
 
 
 def diff_and_reconcile(category, current_items, push_add, push_remove, value_changed=None):
     """Shared push+reconcile skeleton used by watched_sync/ratings_sync/
     collection_sync's push(): diff `current_items` (key -> item) against
     sync_state's known_items for `category`, call push_add(items)/
-    push_remove(items) for the deltas, persist the new known_items, and
-    return a summary dict.
+    push_remove(items) for the deltas, and return a summary dict.
 
     `value_changed(known_item, item)` -- optional -- adds an item to to_add
     even when its key is already known, if the value differs. Only
     ratings_sync needs this: a rating can change without membership changing,
     unlike watched/collection, which are membership-only (a rewatch/re-add
-    with the same value doesn't need a fresh push)."""
+    with the same value doesn't need a fresh push).
+
+    push_add/push_remove are expected to persist each pushed chunk's
+    known-items state as they go (see push_items/push_items_remove above),
+    not just report success at the end -- so a chunk that fails partway
+    through only leaves the unpushed remainder to retry next time."""
     known = sync_state.get_known_items(category)
 
     if value_changed:
@@ -95,5 +127,4 @@ def diff_and_reconcile(category, current_items, push_add, push_remove, value_cha
     if to_remove:
         push_remove(to_remove)
 
-    sync_state.set_known_items(category, current_items)
     return {"pushed_add": len(to_add), "pushed_remove": len(to_remove)}

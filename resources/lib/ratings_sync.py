@@ -47,11 +47,11 @@ def _current_rated_items(snapshot):
 
 
 def _push_add(items):
-    sync_payload.push_items("/sync/ratings", "rating", items)
+    sync_payload.push_items(CATEGORY, "/sync/ratings", "rating", items)
 
 
 def _push_remove(items):
-    sync_payload.push_items_remove("/sync/ratings/remove", items)
+    sync_payload.push_items_remove(CATEGORY, "/sync/ratings/remove", items)
 
 
 def _rating_changed(known_item, item):
@@ -88,13 +88,11 @@ def push_single(record):
         if known_item and known_item.get("rating") == rating:
             return {}
         _push_add([item])
-        sync_state.update_known_item(CATEGORY, key, item)
         return {"pushed_add": 1}
 
     if not known_item:
         return {}
     _push_remove([known_item])
-    sync_state.update_known_item(CATEGORY, key, None)
     return {"pushed_remove": 1}
 
 

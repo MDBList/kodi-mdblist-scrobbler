@@ -57,11 +57,11 @@ def _current_watched_items(snapshot):
 
 
 def _push_add(items):
-    sync_payload.push_items("/sync/watched", "watched_at", items)
+    sync_payload.push_items(CATEGORY, "/sync/watched", "watched_at", items)
 
 
 def _push_remove(items):
-    sync_payload.push_items_remove("/sync/watched/remove", items)
+    sync_payload.push_items_remove(CATEGORY, "/sync/watched/remove", items)
 
 
 def _watched_at_changed(known_item, item):
@@ -79,9 +79,9 @@ def push(snapshot):
 def push_single(record):
     """Immediate push for one item, triggered by a live VideoLibrary.OnUpdate
     notification (Kodi's native "mark as watched"/"mark as unwatched", not
-    just our own scrobble flow). Patches sync_state in place instead of
-    replacing it, since this only ever examines one item, not the full
-    library -- see sync_state.update_known_item.
+    just our own scrobble flow). _push_add/_push_remove persist sync_state
+    for this one item as part of pushing it -- see
+    sync_payload.push_items/push_items_remove.
 
     Returns False only when the item genuinely couldn't be pushed (no id this
     addon can map to a provider). Returns {} for "nothing to do, already in
@@ -99,13 +99,11 @@ def push_single(record):
         if known_item and known_item.get("watched_at") == item.get("watched_at"):
             return {}
         _push_add([item])
-        sync_state.update_known_item(CATEGORY, key, item)
         return {"pushed_add": 1}
 
     if not known_item:
         return {}
     _push_remove([known_item])
-    sync_state.update_known_item(CATEGORY, key, None)
     return {"pushed_remove": 1}
 
 

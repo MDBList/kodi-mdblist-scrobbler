@@ -74,22 +74,21 @@ def get_known_items(category: str):
         return items if isinstance(items, dict) else {}
 
 
-def set_known_items(category: str, items: dict):
-    def mutate(data):
-        data.setdefault(category, {})["known_items"] = items
-    _update(mutate)
-
-
-def update_known_item(category: str, key: str, item):
-    """Patch a single key in place rather than replacing the whole known_items
-    dict -- for a single-item live push (see push_single in watched_sync.py /
-    ratings_sync.py), which only ever examines one item, not the full library."""
+def merge_known_items(category: str, upserts: dict, removed_keys=None):
+    """Merges a batch of upserts and removals into a category's known_items
+    map in one disk round trip -- used to persist push progress
+    chunk-by-chunk rather than only once at the very end of a whole
+    category's diff. That way, if a later chunk aborts the run (e.g. a rate
+    limit that survives its retry budget), the chunks that already pushed
+    successfully are not forgotten and re-pushed from scratch on the next
+    attempt. A single-item live push (see push_single in watched_sync.py /
+    ratings_sync.py) is just the one-item case of the same call."""
     def mutate(data):
         bucket = data.setdefault(category, {}).setdefault("known_items", {})
-        if item is None:
+        for key, value in (upserts or {}).items():
+            bucket[key] = value
+        for key in (removed_keys or []):
             bucket.pop(key, None)
-        else:
-            bucket[key] = item
     _update(mutate)
 
 

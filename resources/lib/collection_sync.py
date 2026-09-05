@@ -37,11 +37,11 @@ def _current_collected_items(snapshot):
 
 
 def _push_add(items):
-    sync_payload.push_items("/sync/collection", "collected_at", items)
+    sync_payload.push_items(CATEGORY, "/sync/collection", "collected_at", items)
 
 
 def _push_remove(items):
-    sync_payload.push_items_remove("/sync/collection/remove", items)
+    sync_payload.push_items_remove(CATEGORY, "/sync/collection/remove", items)
 
 
 def push(snapshot):
