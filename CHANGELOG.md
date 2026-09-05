@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.2] - 2026-09-05
+
+* Fixed hitting MDBList's rate limit on a large first sync: requests are now paced under the server's short-window write budget, and a 429 is retried using the server's own requested wait instead of aborting the whole sync.
+* Fixed losing sync progress if a run is interrupted: push progress is now saved per-batch instead of only at the end, so a later failure no longer forces redoing already-pushed items.
+
 ## [1.3.1] - 2026-09-04
 
 * Fixed watched sync: a rewatch that only updated the watched date (without changing membership) could be silently dropped by the scheduled full sync, and would only reach MDBList via the live push on stop.
