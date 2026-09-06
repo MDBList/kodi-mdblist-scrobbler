@@ -123,7 +123,9 @@ def diff_and_reconcile(category, current_items, push_add, push_remove, value_cha
     safe; only the deliberate periodic timer and manual "Sync now" pass True
     (see main_monitor.py). Even when True, a removal batch larger than
     max(REMOVAL_MIN_BATCH, known_count * REMOVAL_MAX_FRACTION) is skipped
-    and logged rather than pushed. This exists because a diff-based "clean"
+    and logged rather than pushed -- and, ahead of that check, a totally-empty
+    current_items next to a nonempty known baseline is always skipped
+    regardless of batch size. This exists because a diff-based "clean"
     reconcile with no floor once wiped a real user's entire remote
     collection when their local Kodi library briefly (and wrongly) read
     back near-empty. A skipped batch isn't persisted anywhere -- it's simply
@@ -157,6 +159,19 @@ def diff_and_reconcile(category, current_items, push_add, push_remove, value_cha
                     category, len(to_remove)
                 ),
                 level=xbmc.LOGDEBUG,
+            )
+        elif not current_items:
+            # Extra guard ahead of the magnitude check: a totally-empty
+            # current read next to a nonempty known baseline is never a real
+            # mass unwatch/unrate/uncollect, regardless of how few items that
+            # would remove -- the fixed REMOVAL_MIN_BATCH floor alone can't
+            # catch this for a small known-item count. Same handling as an
+            # RPC failure: hold every known item and re-diff fresh next run.
+            skipped_remove = len(to_remove)
+            xbmc.log(
+                "MDBList Sync: {} removal skipped - current_items read is empty while {} known items are on "
+                "file; treating as an unreliable read rather than a real removal".format(category, len(known)),
+                level=xbmc.LOGWARNING,
             )
         else:
             threshold = max(REMOVAL_MIN_BATCH, int(len(known) * REMOVAL_MAX_FRACTION))
