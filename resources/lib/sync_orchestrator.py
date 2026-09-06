@@ -66,6 +66,13 @@ def _notify(message, error=False):
     xbmcgui.Dialog().notification("MDBList Sync", message, icon, 4000)
 
 
+def _set_setting(setting_id, value):
+    try:
+        _addon().setSettingString(setting_id, value)
+    except Exception:
+        pass
+
+
 def _record_summary(summary):
     sync_state.set_last_sync_summary(summary)
     xbmc.log("MDBList Sync: run complete - {}".format(summary), level=xbmc.LOGDEBUG)
@@ -141,6 +148,15 @@ def run(notify=False, allow_remove=False):
                 xbmc.log(
                     "MDBList Sync: run aborted - Kodi library snapshot is empty but remote state is not; "
                     "treating as an unreliable read rather than a real removal", level=xbmc.LOGERROR
+                )
+                # Surfaced unconditionally, not gated on `notify` -- a run
+                # that silently did nothing at all is the one outcome the
+                # user must be able to notice even from a background timer
+                # run, same reasoning as the skipped-removal note in
+                # _summary_text below.
+                _set_setting(
+                    "sync_last_run",
+                    "sync skipped - local library looks empty ({})".format(xbmc.getInfoLabel("System.Time")),
                 )
                 if notify:
                     _notify("Sync skipped: local library looks empty", error=True)
