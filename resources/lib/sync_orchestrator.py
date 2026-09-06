@@ -321,8 +321,11 @@ def _summary_text(summary):
                 text += " ({} skipped, see log)".format(push.get("skipped_remove", 0))
             parts.append(text)
         pull = summary.get("{}_pull".format(category))
-        if pull and pull.get("pulled_applied"):
-            parts.append("{} pull {}".format(category, pull.get("pulled_applied", 0)))
+        if pull and (pull.get("pulled_applied") or pull.get("skipped_remove")):
+            text = "{} pull {}".format(category, pull.get("pulled_applied", 0))
+            if pull.get("skipped_remove"):
+                text += " ({} skipped, see log)".format(pull.get("skipped_remove", 0))
+            parts.append(text)
     return "{} ({})".format(", ".join(parts) or "no changes", datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
 
 

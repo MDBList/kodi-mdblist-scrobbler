@@ -1,5 +1,7 @@
 import datetime
 
+import xbmc
+
 from resources.lib import library_snapshot, mdblist_api, sync_payload, sync_state
 from resources.lib.utils import jsonrpc_request, local_time_to_utc_iso, utc_iso_to_local_time
 
@@ -214,26 +216,75 @@ def _pull_full(snapshot, server_time):
     # journal's 30-day retention window has lapsed, so there's no incremental
     # removal feed to rely on instead.
     #
-    # The removal timestamp is the server-provided watermark, not "now": if
-    # the item was genuinely rewatched between when the server generated
-    # this snapshot and now, its local timestamp needs to be newer than
-    # server_time (not a later client-side "now") to correctly win the
-    # conflict-resolution check in _apply_watched.
-    removal_at = server_time or _now_iso()
+    # This is the same "known minus current-read = remove" shape
+    # diff_and_reconcile guards against on push, just mirrored to the
+    # opposite direction: a successful-but-degraded /sync/watched response
+    # would otherwise read as "everything was unwatched remotely" and wipe
+    # local state. Same two guards, same constants -- see
+    # removal_safety_pattern.md.
+    locally_watched = []
     for movie in library_snapshot.iter_movies(snapshot):
         if movie["playcount"] > 0:
             key = library_snapshot.canonical_movie_key(movie["ids"])
-            if key and key not in matched_keys and _apply_watched(movie, "removed", removal_at):
-                applied += 1
-
+            if key:
+                locally_watched.append((movie, key))
     for episode in library_snapshot.iter_episodes(snapshot):
         if episode["playcount"] > 0:
             key = library_snapshot.canonical_episode_key(episode["show_ids"], episode["season"], episode["episode"])
-            if key and key not in matched_keys and _apply_watched(episode, "removed", removal_at):
+            if key:
+                locally_watched.append((episode, key))
+
+    candidate_removals = [(record, key) for record, key in locally_watched if key not in matched_keys]
+    remote_count = len(data.get("movies", [])) + len(data.get("episodes", []))
+    hold_removals = bool(candidate_removals) and _should_hold_pull_removals(
+        remote_count, len(candidate_removals), len(locally_watched)
+    )
+
+    if candidate_removals and not hold_removals:
+        # The removal timestamp is the server-provided watermark, not "now":
+        # if the item was genuinely rewatched between when the server
+        # generated this snapshot and now, its local timestamp needs to be
+        # newer than server_time (not a later client-side "now") to
+        # correctly win the conflict-resolution check in _apply_watched.
+        removal_at = server_time or _now_iso()
+        for record, _key in candidate_removals:
+            if _apply_watched(record, "removed", removal_at):
                 applied += 1
+
+    if hold_removals:
+        # Held, not dropped -- don't advance the watermark either, so the
+        # next pull retries a full reconcile from scratch (and, per pull(),
+        # keeps landing back here) instead of downgrading to the incremental
+        # journal path and never revisiting these items.
+        return {"pulled_applied": applied, "mode": "full", "skipped_remove": len(candidate_removals)}
 
     sync_state.set_synced_at(CATEGORY, server_time or _now_iso())
     return {"pulled_applied": applied, "mode": "full"}
+
+
+def _should_hold_pull_removals(remote_count, candidate_count, known_count):
+    """Same shape as sync_payload.diff_and_reconcile's removal guard, applied
+    to the pull-direction full reconcile: a totally-empty remote read next to
+    known-watched items is always held, and otherwise a batch larger than
+    max(REMOVAL_MIN_BATCH, known_count * REMOVAL_MAX_FRACTION) is held too."""
+    if remote_count == 0:
+        xbmc.log(
+            "MDBList Sync: watched pull removal held - remote full list came back empty while {} items are "
+            "locally watched; treating as an unreliable read rather than a real removal".format(known_count),
+            level=xbmc.LOGWARNING,
+        )
+        return True
+
+    threshold = max(sync_payload.REMOVAL_MIN_BATCH, int(known_count * sync_payload.REMOVAL_MAX_FRACTION))
+    if candidate_count > threshold:
+        xbmc.log(
+            "MDBList Sync: watched pull removal held - {} of {} locally watched items would be unwatched "
+            "(threshold {}); remote read may be incomplete".format(candidate_count, known_count, threshold),
+            level=xbmc.LOGWARNING,
+        )
+        return True
+
+    return False
 
 
 def _pull_incremental(snapshot, entries, server_time):
