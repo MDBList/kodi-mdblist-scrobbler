@@ -1,8 +1,16 @@
 from collections import OrderedDict
 
+import xbmc
+
 from resources.lib import library_snapshot, mdblist_api, sync_state
 
 BATCH_SIZE = 100
+
+# Magnitude circuit-breaker on removals -- see diff_and_reconcile. Fixed, not
+# user-configurable: there's a single correct answer here, not a per-user
+# preference.
+REMOVAL_MAX_FRACTION = 0.30
+REMOVAL_MIN_BATCH = 15  # trip threshold = max(this, known_count * REMOVAL_MAX_FRACTION)
 
 
 def build_shows_payload(episode_entries):
@@ -98,7 +106,7 @@ def push_items_remove(category, endpoint, items):
         _persist_removed_chunk(category, batch)
 
 
-def diff_and_reconcile(category, current_items, push_add, push_remove, value_changed=None):
+def diff_and_reconcile(category, current_items, push_add, push_remove, value_changed=None, allow_remove=False):
     """Shared push+reconcile skeleton used by watched_sync/ratings_sync/
     collection_sync's push(): diff `current_items` (key -> item) against
     sync_state's known_items for `category`, call push_add(items)/
@@ -109,6 +117,18 @@ def diff_and_reconcile(category, current_items, push_add, push_remove, value_cha
     ratings_sync needs this: a rating can change without membership changing,
     unlike watched/collection, which are membership-only (a rewatch/re-add
     with the same value doesn't need a fresh push).
+
+    `allow_remove` gates whether this call may push removals at all --
+    defaults to False so a call site that forgets to think about it stays
+    safe; only the deliberate periodic timer and manual "Sync now" pass True
+    (see main_monitor.py). Even when True, a removal batch larger than
+    max(REMOVAL_MIN_BATCH, known_count * REMOVAL_MAX_FRACTION) is skipped
+    and logged rather than pushed. This exists because a diff-based "clean"
+    reconcile with no floor once wiped a real user's entire remote
+    collection when their local Kodi library briefly (and wrongly) read
+    back near-empty. A skipped batch isn't persisted anywhere -- it's simply
+    re-diffed from scratch next run, so once the local library reads back
+    correctly the very next qualifying run pushes it normally.
 
     push_add/push_remove are expected to persist each pushed chunk's
     known-items state as they go (see push_items/push_items_remove above),
@@ -124,7 +144,33 @@ def diff_and_reconcile(category, current_items, push_add, push_remove, value_cha
 
     if to_add:
         push_add(to_add)
-    if to_remove:
-        push_remove(to_remove)
 
-    return {"pushed_add": len(to_add), "pushed_remove": len(to_remove)}
+    pushed_remove = 0
+    skipped_remove = 0
+    if to_remove:
+        if not allow_remove:
+            # Routine, not suspicious -- this call site's trigger (scan/clean
+            # finished, service start) simply never removes, by policy.
+            skipped_remove = len(to_remove)
+            xbmc.log(
+                "MDBList Sync: {} removal skipped ({} items) - this trigger doesn't allow removals".format(
+                    category, len(to_remove)
+                ),
+                level=xbmc.LOGDEBUG,
+            )
+        else:
+            threshold = max(REMOVAL_MIN_BATCH, int(len(known) * REMOVAL_MAX_FRACTION))
+            if len(to_remove) <= threshold:
+                push_remove(to_remove)
+                pushed_remove = len(to_remove)
+            else:
+                # The circuit breaker actually tripped -- this is the
+                # notable case, worth a louder log level.
+                skipped_remove = len(to_remove)
+                xbmc.log(
+                    "MDBList Sync: {} removal skipped - {} of {} known items would be removed (threshold {}); "
+                    "local Kodi library may be incomplete".format(category, len(to_remove), len(known), threshold),
+                    level=xbmc.LOGWARNING,
+                )
+
+    return {"pushed_add": len(to_add), "pushed_remove": pushed_remove, "skipped_remove": skipped_remove}

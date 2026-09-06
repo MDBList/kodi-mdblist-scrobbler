@@ -58,9 +58,12 @@ def _rating_changed(known_item, item):
     return known_item.get("rating") != item.get("rating")
 
 
-def push(snapshot):
+def push(snapshot, allow_remove=False):
+    """allow_remove: see sync_payload.diff_and_reconcile."""
     current = _current_rated_items(snapshot)
-    return sync_payload.diff_and_reconcile(CATEGORY, current, _push_add, _push_remove, value_changed=_rating_changed)
+    return sync_payload.diff_and_reconcile(
+        CATEGORY, current, _push_add, _push_remove, value_changed=_rating_changed, allow_remove=allow_remove,
+    )
 
 
 def push_single(record):

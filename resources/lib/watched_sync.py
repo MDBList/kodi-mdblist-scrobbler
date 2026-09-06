@@ -68,12 +68,16 @@ def _watched_at_changed(known_item, item):
     return known_item.get("watched_at") != item.get("watched_at")
 
 
-def push(snapshot):
+def push(snapshot, allow_remove=False):
     """Membership diff, plus a value-changed check on watched_at so a rewatch
     that only updates lastplayed (membership unchanged) is still re-pushed by
-    the full diff, not just by the live push from /scrobble/stop."""
+    the full diff, not just by the live push from /scrobble/stop.
+
+    allow_remove: see sync_payload.diff_and_reconcile."""
     current = _current_watched_items(snapshot)
-    return sync_payload.diff_and_reconcile(CATEGORY, current, _push_add, _push_remove, value_changed=_watched_at_changed)
+    return sync_payload.diff_and_reconcile(
+        CATEGORY, current, _push_add, _push_remove, value_changed=_watched_at_changed, allow_remove=allow_remove,
+    )
 
 
 def push_single(record):

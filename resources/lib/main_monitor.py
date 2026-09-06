@@ -32,7 +32,10 @@ class MainMonitor(xbmc.Monitor):
         # (name, interval_minutes, callback) -- one table instead of three
         # near-identical start/stop/on-timer method trios.
         self._timer_specs = (
-            ("sync", SYNC_INTERVAL_MINUTES, lambda: sync_orchestrator.run_async()),
+            # allow_remove=True: the deliberate 24h reconciliation backstop,
+            # trusted to actually remove things from MDBList (still subject
+            # to sync_payload's magnitude circuit-breaker).
+            ("sync", SYNC_INTERVAL_MINUTES, lambda: sync_orchestrator.run_async(allow_remove=True)),
             ("activity", ACTIVITY_CHECK_INTERVAL_MINUTES, lambda: sync_orchestrator.check_activity_async()),
             ("ratings", RATINGS_CHECK_INTERVAL_MINUTES, lambda: sync_orchestrator.check_ratings_local_async()),
         )
@@ -49,7 +52,12 @@ class MainMonitor(xbmc.Monitor):
             self._start_timer(name, interval_minutes, callback)
 
         # Catch-up sync shortly after the service starts, in addition to the
-        # periodic timers and the library-scan hooks below.
+        # periodic timers and the library-scan hooks below. Deliberately
+        # allow_remove=False (the default): this is the riskiest possible
+        # moment to trust an empty-looking Kodi library -- the video library
+        # backend may not have finished loading yet, especially right after
+        # a crash-triggered restart. Additions still push immediately;
+        # removals wait for the 24h timer or manual "Sync now".
         sync_orchestrator.run_async()
 
     def _start_timer(self, name, interval_minutes, callback):
@@ -89,10 +97,17 @@ class MainMonitor(xbmc.Monitor):
         sync_state.set_migration_done("rating_save_mdblist")
 
     def onScanFinished(self, library):
+        # allow_remove=False (default) -- same reasoning as the service-start
+        # catch-up sync above. A scan finishing doesn't guarantee the library
+        # is in a trustworthy state (e.g. a scan against a temporarily
+        # unavailable network share).
         if library == "video" and self._bool_setting("sync.on_library_scan", True):
             sync_orchestrator.run_async()
 
     def onCleanFinished(self, library):
+        # allow_remove=False (default) -- this is precisely the incident
+        # vector: a "Clean Library" run against unavailable sources can strip
+        # entries Kodi still actually has, and this fires right after.
         if library == "video" and self._bool_setting("sync.on_library_scan", True):
             sync_orchestrator.run_async()
 
@@ -108,7 +123,9 @@ class MainMonitor(xbmc.Monitor):
             # in the same process/lock as everything else. Kodi prefixes
             # NotifyAll messages (typically "Other.<message>"), so match on
             # suffix rather than the exact prefix.
-            sync_orchestrator.run_async(notify=True)
+            # allow_remove=True: explicit user intent, foreground, user is
+            # watching -- same trust level as the 24h timer.
+            sync_orchestrator.run_async(notify=True, allow_remove=True)
 
     def _handle_video_library_update(self, data):
         try:
