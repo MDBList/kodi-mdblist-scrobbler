@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.3] - 2026-09-07
+
+* Fixed a rare failure mode where a sync running right after Kodi starts, a library scan/clean finishes, or a temporarily unreadable video library could be misread as "everything was removed" and push that as a mass removal to MDBList (or, in the reverse direction, unwatch a batch of items locally). Removals are now only ever applied on a deliberate sync (the 24-hour background sync or manual "Sync now"), and a suspiciously empty or oversized removal batch is held and retried on the next sync instead of applied.
+
 ## [1.3.2] - 2026-09-05
 
 * Fixed hitting MDBList's rate limit on a large first sync: requests are now paced under the server's short-window write budget, and a 429 is retried using the server's own requested wait instead of aborting the whole sync.
