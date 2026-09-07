@@ -124,13 +124,16 @@ def diff_and_reconcile(category, current_items, push_add, push_remove, value_cha
     (see main_monitor.py). Even when True, a removal batch larger than
     max(REMOVAL_MIN_BATCH, known_count * REMOVAL_MAX_FRACTION) is skipped
     and logged rather than pushed -- and, ahead of that check, a totally-empty
-    current_items next to a nonempty known baseline is always skipped
-    regardless of batch size. This exists because a diff-based "clean"
-    reconcile with no floor once wiped a real user's entire remote
-    collection when their local Kodi library briefly (and wrongly) read
-    back near-empty. A skipped batch isn't persisted anywhere -- it's simply
-    re-diffed from scratch next run, so once the local library reads back
-    correctly the very next qualifying run pushes it normally.
+    current_items next to a known baseline bigger than that same threshold is
+    always skipped regardless of batch size. Tied to the threshold rather
+    than an absolute veto so a user with a small category can still clear it
+    completely on a trusted run -- see removal_safety_pattern.md's "Core
+    Rule". This exists because a diff-based "clean" reconcile with no floor
+    once wiped a real user's entire remote collection when their local Kodi
+    library briefly (and wrongly) read back near-empty. A skipped batch isn't
+    persisted anywhere -- it's simply re-diffed from scratch next run, so
+    once the local library reads back correctly the very next qualifying run
+    pushes it normally.
 
     push_add/push_remove are expected to persist each pushed chunk's
     known-items state as they go (see push_items/push_items_remove above),
@@ -150,6 +153,7 @@ def diff_and_reconcile(category, current_items, push_add, push_remove, value_cha
     pushed_remove = 0
     skipped_remove = 0
     if to_remove:
+        threshold = max(REMOVAL_MIN_BATCH, int(len(known) * REMOVAL_MAX_FRACTION))
         if not allow_remove:
             # Routine, not suspicious -- this call site's trigger (scan/clean
             # finished, service start) simply never removes, by policy.
@@ -160,32 +164,34 @@ def diff_and_reconcile(category, current_items, push_add, push_remove, value_cha
                 ),
                 level=xbmc.LOGDEBUG,
             )
-        elif not current_items:
-            # Extra guard ahead of the magnitude check: a totally-empty
-            # current read next to a nonempty known baseline is never a real
-            # mass unwatch/unrate/uncollect, regardless of how few items that
-            # would remove -- the fixed REMOVAL_MIN_BATCH floor alone can't
-            # catch this for a small known-item count. Same handling as an
-            # RPC failure: hold every known item and re-diff fresh next run.
+        elif not current_items and len(known) > threshold:
+            # Extra guard ahead of the magnitude check below, tied to the
+            # same threshold rather than an absolute veto: a totally-empty
+            # current read next to a known baseline bigger than the
+            # threshold is never a real mass unwatch/unrate/uncollect, but a
+            # user whose whole category is smaller than the threshold must
+            # still be able to clear it completely on a trusted run -- see
+            # removal_safety_pattern.md. Same handling as an RPC failure:
+            # hold every known item and re-diff fresh next run.
             skipped_remove = len(to_remove)
             xbmc.log(
                 "MDBList Sync: {} removal skipped - current_items read is empty while {} known items are on "
-                "file; treating as an unreliable read rather than a real removal".format(category, len(known)),
+                "file (threshold {}); treating as an unreliable read rather than a real removal".format(
+                    category, len(known), threshold
+                ),
+                level=xbmc.LOGWARNING,
+            )
+        elif len(to_remove) > threshold:
+            # The circuit breaker actually tripped -- this is the
+            # notable case, worth a louder log level.
+            skipped_remove = len(to_remove)
+            xbmc.log(
+                "MDBList Sync: {} removal skipped - {} of {} known items would be removed (threshold {}); "
+                "local Kodi library may be incomplete".format(category, len(to_remove), len(known), threshold),
                 level=xbmc.LOGWARNING,
             )
         else:
-            threshold = max(REMOVAL_MIN_BATCH, int(len(known) * REMOVAL_MAX_FRACTION))
-            if len(to_remove) <= threshold:
-                push_remove(to_remove)
-                pushed_remove = len(to_remove)
-            else:
-                # The circuit breaker actually tripped -- this is the
-                # notable case, worth a louder log level.
-                skipped_remove = len(to_remove)
-                xbmc.log(
-                    "MDBList Sync: {} removal skipped - {} of {} known items would be removed (threshold {}); "
-                    "local Kodi library may be incomplete".format(category, len(to_remove), len(known), threshold),
-                    level=xbmc.LOGWARNING,
-                )
+            push_remove(to_remove)
+            pushed_remove = len(to_remove)
 
     return {"pushed_add": len(to_add), "pushed_remove": pushed_remove, "skipped_remove": skipped_remove}

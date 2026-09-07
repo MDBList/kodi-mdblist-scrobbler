@@ -176,7 +176,7 @@ def _apply_episode_entry(snapshot, show_ids, season, episode, status, remote_at)
     return _apply_watched(match, status, remote_at), key
 
 
-def _pull_full(snapshot, server_time):
+def _pull_full(snapshot, server_time, trusted=False):
     # extended=None (full, not ids_only): ids_only only exposes a movie's
     # tmdb id (and an episode's parent show's tmdb id). A local item
     # identified only by imdb/tvdb/trakt/mdblist couldn't be matched or ruled
@@ -220,8 +220,8 @@ def _pull_full(snapshot, server_time):
     # diff_and_reconcile guards against on push, just mirrored to the
     # opposite direction: a successful-but-degraded /sync/watched response
     # would otherwise read as "everything was unwatched remotely" and wipe
-    # local state. Same two guards, same constants -- see
-    # removal_safety_pattern.md.
+    # local state. Same three guards (trust, empty-vs-threshold, magnitude),
+    # same constants -- see removal_safety_pattern.md.
     locally_watched = []
     for movie in library_snapshot.iter_movies(snapshot):
         if movie["playcount"] > 0:
@@ -237,7 +237,7 @@ def _pull_full(snapshot, server_time):
     candidate_removals = [(record, key) for record, key in locally_watched if key not in matched_keys]
     remote_count = len(data.get("movies", [])) + len(data.get("episodes", []))
     hold_removals = bool(candidate_removals) and _should_hold_pull_removals(
-        remote_count, len(candidate_removals), len(locally_watched)
+        remote_count, len(candidate_removals), len(locally_watched), trusted
     )
 
     if candidate_removals and not hold_removals:
@@ -262,20 +262,37 @@ def _pull_full(snapshot, server_time):
     return {"pulled_applied": applied, "mode": "full"}
 
 
-def _should_hold_pull_removals(remote_count, candidate_count, known_count):
+def _should_hold_pull_removals(remote_count, candidate_count, known_count, trusted):
     """Same shape as sync_payload.diff_and_reconcile's removal guard, applied
-    to the pull-direction full reconcile: a totally-empty remote read next to
-    known-watched items is always held, and otherwise a batch larger than
-    max(REMOVAL_MIN_BATCH, known_count * REMOVAL_MAX_FRACTION) is held too."""
-    if remote_count == 0:
+    to the pull-direction full reconcile: held when the trigger isn't trusted
+    for removals, when a totally-empty remote read sits next to a known-watched
+    baseline bigger than the threshold, or when the removal batch itself is
+    larger than max(REMOVAL_MIN_BATCH, known_count * REMOVAL_MAX_FRACTION).
+    The empty-read check is tied to the threshold rather than an absolute
+    veto, same reasoning as diff_and_reconcile -- a user whose whole watched
+    library is smaller than the threshold must still be able to clear it
+    completely on a trusted run."""
+    threshold = max(sync_payload.REMOVAL_MIN_BATCH, int(known_count * sync_payload.REMOVAL_MAX_FRACTION))
+
+    if not trusted:
+        xbmc.log(
+            "MDBList Sync: watched pull removal held ({} items) - this trigger doesn't allow removals".format(
+                candidate_count
+            ),
+            level=xbmc.LOGDEBUG,
+        )
+        return True
+
+    if remote_count == 0 and known_count > threshold:
         xbmc.log(
             "MDBList Sync: watched pull removal held - remote full list came back empty while {} items are "
-            "locally watched; treating as an unreliable read rather than a real removal".format(known_count),
+            "locally watched (threshold {}); treating as an unreliable read rather than a real removal".format(
+                known_count, threshold
+            ),
             level=xbmc.LOGWARNING,
         )
         return True
 
-    threshold = max(sync_payload.REMOVAL_MIN_BATCH, int(known_count * sync_payload.REMOVAL_MAX_FRACTION))
     if candidate_count > threshold:
         xbmc.log(
             "MDBList Sync: watched pull removal held - {} of {} locally watched items would be unwatched "
@@ -319,17 +336,25 @@ def _pull_incremental(snapshot, entries, server_time):
     return {"pulled_applied": applied, "mode": "incremental"}
 
 
-def pull(snapshot, server_time):
+def pull(snapshot, server_time, trusted=False):
     """server_time: /sync/last_activities' own server_time -- a
     safety-margined timestamp meant to be persisted as the next watermark,
     rather than the device's own clock, which can drift and under-cover the
-    next incremental window."""
+    next incremental window.
+
+    trusted: forwarded to _pull_full's removal reconcile -- see
+    _should_hold_pull_removals and removal_safety_pattern.md's Trusted Runs
+    section. Defaults to False so a call site that forgets to think about it
+    stays safe; only run()'s allow_remove (24h backstop, manual "Sync now")
+    should pass True. _pull_incremental doesn't need this: it applies
+    explicit per-item journal events, not a "known minus current-read"
+    diff, so it isn't the failure mode this pattern guards against."""
     since = sync_state.get_synced_at(CATEGORY)
     if not since:
-        return _pull_full(snapshot, server_time)
+        return _pull_full(snapshot, server_time, trusted)
 
     journal = mdblist_api.fetch_journal(since=since)
     if journal.get("requires_full_sync"):
-        return _pull_full(snapshot, server_time)
+        return _pull_full(snapshot, server_time, trusted)
 
     return _pull_incremental(snapshot, journal.get("entries", []), server_time)

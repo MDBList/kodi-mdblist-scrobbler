@@ -169,7 +169,7 @@ def run(notify=False, allow_remove=False):
 
             if watched_enabled:
                 summary["watched_push"] = watched_sync.push(snapshot, allow_remove=allow_remove)
-                summary["watched_pull"] = watched_sync.pull(snapshot, server_time)
+                summary["watched_pull"] = watched_sync.pull(snapshot, server_time, trusted=allow_remove)
 
             if ratings_enabled:
                 summary["ratings_push"] = ratings_sync.push(snapshot, allow_remove=allow_remove)
@@ -243,7 +243,11 @@ def check_activity(notify=False):
 
         try:
             if watched_changed:
-                summary["watched_pull"] = watched_sync.pull(snapshot, server_time)
+                # Explicit trusted=False: this is the frequent activity poll,
+                # not the deliberate reconciliation backstop -- per
+                # removal_safety_pattern.md's Trusted Runs section it must
+                # never remove, only apply adds/updates.
+                summary["watched_pull"] = watched_sync.pull(snapshot, server_time, trusted=False)
             if ratings_changed:
                 summary["ratings_pull"] = ratings_sync.pull(snapshot, server_time)
         except (MDBListApiError, JSONRPCError) as exception:
