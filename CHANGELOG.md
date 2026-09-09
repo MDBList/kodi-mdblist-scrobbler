@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.5] - 2026-09-09
+
+* Fixed the addon taking 5+ seconds to stop on every Kodi quit, forcing Kodi to kill it instead of a clean shutdown -- its background sync/activity/ratings polling threads are now stopped as soon as shutdown begins.
+
 ## [1.3.4] - 2026-09-09
 
 * Fixed watched/ratings sync missing episodes for shows where a different season/episode numbering is used than MDBList's own data (a common mismatch for anime, e.g. between TheTVDB and TMDb). Episodes are now matched by their own tmdb/tvdb id first, before falling back to season/episode number.
