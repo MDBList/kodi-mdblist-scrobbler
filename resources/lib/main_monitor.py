@@ -96,6 +96,33 @@ class MainMonitor(xbmc.Monitor):
                 pass
         sync_state.set_migration_done("rating_save_mdblist")
 
+    def shutdown(self):
+        """Called from service.py once waitForAbort() returns. Without this,
+        the sync/activity/ratings Timer threads (each a plain non-daemon
+        threading.Thread sitting in a wait() up to 24h long) are never told
+        to stop, so they block clean interpreter exit and Kodi has to
+        force-kill the whole service after its 5-second grace period
+        (confirmed: "script didn't stop in 5 seconds - let's kill it" in
+        kodi.log on every quit, and confirmed as this addon's own doing by
+        temporarily removing it from the addons folder -- Kodi then shut
+        down immediately, with no CPythonInvoker delay at all).
+
+        xbmc.Monitor.onAbortRequested() looks like the natural hook for this
+        but does NOT fire in practice (confirmed empirically: a log line at
+        the top of an onAbortRequested override never appeared, even though
+        the very next line in service.py -- monitor.waitForAbort() returning
+        -- reliably does). waitForAbort() unblocking is itself the abort
+        signal, so this is called right after it instead, rather than
+        relying on a callback that doesn't run.
+
+        Timer.stop() wakes its wait() immediately, so this returns well
+        within the 5-second window. Also stops the player's
+        scrobble-progress interval timer, for the same reason, in case Kodi
+        is closed mid-playback."""
+        for name in list(self._timers.keys()):
+            self._stop_timer(name)
+        self.player_monitor.stop_interval_timer()
+
     def onScanFinished(self, library):
         # allow_remove=False (default) -- same reasoning as the service-start
         # catch-up sync above. A scan finishing doesn't guarantee the library
