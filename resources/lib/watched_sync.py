@@ -168,9 +168,17 @@ def _apply_movie_entry(snapshot, ids, status, remote_at):
     return _apply_watched(match, status, remote_at), library_snapshot.canonical_movie_key(match["ids"])
 
 
-def _apply_episode_entry(snapshot, show_ids, season, episode, status, remote_at):
-    match = library_snapshot.find_episode_match(snapshot, show_ids, season, episode)
+def _apply_episode_entry(snapshot, show_ids, season, episode, status, remote_at, episode_ids=None):
+    match = library_snapshot.find_episode_match(snapshot, show_ids, season, episode, episode_ids)
     if not match:
+        xbmc.log(
+            "MDBList Sync: watched pull found no local match for show tmdb={} imdb={} tvdb={} S{}E{} "
+            "episodeTmdb={} episodeTvdb={}".format(
+                show_ids.get("tmdb"), show_ids.get("imdb"), show_ids.get("tvdb"), season, episode,
+                (episode_ids or {}).get("tmdb"), (episode_ids or {}).get("tvdb"),
+            ),
+            level=xbmc.LOGDEBUG,
+        )
         return False, None
     key = library_snapshot.canonical_episode_key(match["show_ids"], match["season"], match["episode"])
     return _apply_watched(match, status, remote_at), key
@@ -184,6 +192,13 @@ def _pull_full(snapshot, server_time, trusted=False):
     # tell "not remotely watched" apart from "couldn't check" -- full mode
     # gives every provider id.
     data = mdblist_api.fetch_sync_items("/sync/watched", extended=None)
+    xbmc.log(
+        "MDBList Sync: watched full pull fetched {} movies, {} episodes from MDBList".format(
+            len(data.get("movies", [])), len(data.get("episodes", []))
+        ),
+        level=xbmc.LOGDEBUG,
+    )
+
     applied = 0
     matched_keys = set()
 
@@ -204,7 +219,7 @@ def _pull_full(snapshot, server_time, trusted=False):
             continue
         applied_ok, key = _apply_episode_entry(
             snapshot, show_ids, episode.get("season"), episode.get("number"),
-            "active", entry.get("last_watched_at"),
+            "active", entry.get("last_watched_at"), episode.get("ids"),
         )
         if key:
             matched_keys.add(key)
@@ -306,6 +321,7 @@ def _should_hold_pull_removals(remote_count, candidate_count, known_count, trust
 
 def _pull_incremental(snapshot, entries, server_time):
     applied = 0
+    skipped_type = 0
     for entry in entries:
         if entry.get("category") != "watched":
             continue
@@ -327,10 +343,23 @@ def _pull_incremental(snapshot, entries, server_time):
             if applied_ok:
                 applied += 1
         elif entry.get("item_type") == "episode":
-            applied_ok, _key = _apply_episode_entry(snapshot, ids, entry.get("season"), entry.get("episode"), status, remote_at)
+            episode_ids = library_snapshot.journal_episode_ids(entry)
+            applied_ok, _key = _apply_episode_entry(
+                snapshot, ids, entry.get("season"), entry.get("episode"), status, remote_at, episode_ids,
+            )
             if applied_ok:
                 applied += 1
-        # show/season-level rows have no directly writable Kodi field; skipped
+        else:
+            # show/season-level rows have no directly writable Kodi field; skipped
+            skipped_type += 1
+
+    if skipped_type:
+        xbmc.log(
+            "MDBList Sync: watched incremental pull skipped {} journal entries with unhandled item type".format(
+                skipped_type
+            ),
+            level=xbmc.LOGDEBUG,
+        )
 
     sync_state.set_synced_at(CATEGORY, server_time or _now_iso())
     return {"pulled_applied": applied, "mode": "incremental"}
@@ -351,10 +380,22 @@ def pull(snapshot, server_time, trusted=False):
     diff, so it isn't the failure mode this pattern guards against."""
     since = sync_state.get_synced_at(CATEGORY)
     if not since:
+        xbmc.log("MDBList Sync: watched pull has no cursor - running full pull", level=xbmc.LOGDEBUG)
         return _pull_full(snapshot, server_time, trusted)
 
     journal = mdblist_api.fetch_journal(since=since)
     if journal.get("requires_full_sync"):
+        xbmc.log(
+            "MDBList Sync: watched pull cursor {} is outside journal retention - running full pull".format(since),
+            level=xbmc.LOGDEBUG,
+        )
         return _pull_full(snapshot, server_time, trusted)
 
-    return _pull_incremental(snapshot, journal.get("entries", []), server_time)
+    entries = journal.get("entries", [])
+    xbmc.log(
+        "MDBList Sync: watched pull cursor {} - running incremental pull ({} journal entries)".format(
+            since, len(entries)
+        ),
+        level=xbmc.LOGDEBUG,
+    )
+    return _pull_incremental(snapshot, entries, server_time)
