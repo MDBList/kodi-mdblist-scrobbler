@@ -115,6 +115,25 @@ def set_last_sync_summary(summary: dict):
     _update(mutate)
 
 
+def reset_all():
+    """Wipes all persisted sync state (cursors, known_items, the
+    last_activities_seen watermark, and the last-run summary) -- port of
+    jellyfin-plugin-mdblist's SyncStateStore.ResetUserAsync, adapted: Kodi
+    is single-profile/single-account, so there's no per-user scoping to
+    remove here, just the whole file's sync state. Migration markers are
+    left alone -- they're one-time-setup completion flags, unrelated to
+    which MDBList account is linked. Called on disconnect so a later
+    reconnect (same or a different MDBList account) starts from a clean
+    full resync instead of diffing/pulling against the previous account's
+    leftover baseline."""
+    def mutate(data):
+        for category in ("watched", "ratings", "collection"):
+            data.pop(category, None)
+        data.pop("last_activities_seen", None)
+        data.pop("last_run", None)
+    _update(mutate)
+
+
 def get_migration_done(name: str):
     with _lock:
         done = _load().get("migrations")
