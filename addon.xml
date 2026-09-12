@@ -19,8 +19,9 @@
     </extension>
     <extension point="xbmc.addon.metadata">
         <platform>all</platform>
-        <summary lang="en">MDBList Scrobbler &amp; Sync</summary>
-        <description lang="en">Track watched TV shows and movies with MDBList scrobble endpoints, and two-way sync watched status, ratings, and library/collection with MDBList</description>
+        <license>MIT</license>
+        <summary lang="en_GB">MDBList Scrobbler &amp; Sync</summary>
+        <description lang="en_GB">Track watched TV shows and movies with MDBList scrobble endpoints, and two-way sync watched status, ratings, and library/collection with MDBList</description>
         <website>https://mdblist.com</website>
         <source>https://github.com/linaspurinis/kodi-mdblist-scrobbler</source>
         <assets>
