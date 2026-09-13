@@ -31,11 +31,15 @@ class PlayerMonitor(xbmc.Player):
 
         self.video_info = {}
         self.rating_prompt_shown = False
+        self.rating_save_error = None
 
         self.load_settings()
 
-    def show_message(self, message: str):
-        jsonrpc_request("GUI.ShowNotification", {"title": "MDBList Scrobbler", "message": message})
+    def show_message(self, message: str, error: bool = False):
+        params = {"title": "MDBList Scrobbler", "message": message}
+        if error:
+            params["image"] = "error"
+        jsonrpc_request("GUI.ShowNotification", params)
 
     def load_settings(self):
         self.settings = xbmcaddon.Addon().getSettings()
@@ -408,6 +412,7 @@ class PlayerMonitor(xbmc.Player):
         self.current_time = None
         self.video_info = {}
         self.rating_prompt_shown = False
+        self.rating_save_error = None
 
     def get_progress_percent(self):
         if not self.total_time or self.current_time is None:
@@ -472,8 +477,8 @@ class PlayerMonitor(xbmc.Player):
             return False
 
         if library_id in (None, -1):
-            if not self.get_bool_setting("sync.ratings.enabled", False):
-                xbmc.log("MDBList Scrobbler: Skipping rating prompt, item is not in Kodi library and ratings sync is disabled", level=xbmc.LOGDEBUG)
+            if not self.get_bool_setting("rating.save.mdblist", True):
+                xbmc.log("MDBList Scrobbler: Skipping rating prompt, item is not in Kodi library and saving to MDBList is disabled", level=xbmc.LOGDEBUG)
                 return False
             xbmc.log("MDBList Scrobbler: Item not in Kodi library, Kodi rating will be skipped but MDBList rating can proceed", level=xbmc.LOGDEBUG)
 
@@ -523,10 +528,11 @@ class PlayerMonitor(xbmc.Player):
             return True
         except Exception as exception:
             xbmc.log("MDBList Scrobbler: Failed to save Kodi rating - {}".format(str(exception)), level=xbmc.LOGERROR)
+            self.rating_save_error = "Kodi save failed"
             return False
 
     def save_mdblist_rating(self, rating: int):
-        if not self.get_bool_setting("sync.ratings.enabled", False):
+        if not self.get_bool_setting("rating.save.mdblist", True):
             return False
 
         media_type = self.video_info.get("type")
@@ -535,6 +541,7 @@ class PlayerMonitor(xbmc.Player):
             movie_ids = fix_unique_ids(self.video_info.get("uniqueid", {}), "movie")
             if not movie_ids:
                 xbmc.log("MDBList Scrobbler: Cannot rate movie on MDBList, no supported IDs", level=xbmc.LOGWARNING)
+                self.rating_save_error = "no supported IDs for MDBList"
                 return False
             record = {"dbtype": "movie", "ids": movie_ids, "userrating": rating}
         elif media_type == "episode":
@@ -543,6 +550,7 @@ class PlayerMonitor(xbmc.Player):
                 show_ids = fix_unique_ids(self.video_info.get("uniqueid", {}), "episode")
             if not show_ids:
                 xbmc.log("MDBList Scrobbler: Cannot rate episode on MDBList, no supported show IDs", level=xbmc.LOGWARNING)
+                self.rating_save_error = "no supported show IDs for MDBList"
                 return False
             record = {
                 "dbtype": "episode", "show_ids": show_ids,
@@ -554,15 +562,22 @@ class PlayerMonitor(xbmc.Player):
 
         with sync_orchestrator.try_lock() as acquired:
             if not acquired:
-                # A sync is in progress -- skip rather than race it. The
-                # rating still reaches MDBList via the next periodic push()
-                # backfill diff, so this isn't lost, just deferred.
+                # A sync is in progress -- skip rather than race it. For a
+                # library item, the periodic push() backfill diff will pick
+                # this up later; for a non-library item (e.g. streamed via a
+                # plugin like POV) there is no backfill path at all, so this
+                # rating would otherwise be silently lost -- surface it so
+                # the user knows to rate again.
+                self.rating_save_error = "sync in progress, try again"
                 return False
             try:
                 result = ratings_sync.push_single(record)
+                if result is False:
+                    self.rating_save_error = "no supported IDs for MDBList"
                 return result is not False
             except MDBListApiError as exception:
                 xbmc.log("MDBList Scrobbler: MDBList rating request failed - {}".format(str(exception)), level=xbmc.LOGERROR)
+                self.rating_save_error = "MDBList request failed"
                 return False
 
     def prompt_for_rating(self, playback_event: str):
@@ -570,22 +585,42 @@ class PlayerMonitor(xbmc.Player):
             return
 
         heading = "Rate {}".format(self.video_info.get("title") or self.video_info.get("showtitle") or "item")
+        xbmc.log(
+            "MDBList Scrobbler: Showing rating prompt for type={} id={} uniqueid={} tvshow_uniqueid={} season={} episode={}".format(
+                self.video_info.get("type"), self.video_info.get("id"), self.video_info.get("uniqueid", {}),
+                self.video_info.get("tvshow", {}).get("uniqueid", {}), self.video_info.get("season"),
+                self.video_info.get("episode"),
+            ),
+            level=xbmc.LOGDEBUG,
+        )
         choices = ["Skip"] + ["{}".format(value) for value in range(1, 11)]
         selection = xbmcgui.Dialog().select(heading, choices)
 
         self.rating_prompt_shown = True
 
         if selection <= 0:
+            xbmc.log("MDBList Scrobbler: Rating prompt skipped by user", level=xbmc.LOGDEBUG)
             return
 
         rating = selection
+        self.rating_save_error = None
         saved = []
         if self.save_kodi_rating(rating):
             saved.append("Kodi")
         if self.save_mdblist_rating(rating):
             saved.append("MDBList")
+
+        xbmc.log(
+            "MDBList Scrobbler: Rating prompt result rating={} saved={} error={}".format(
+                rating, saved, self.rating_save_error
+            ),
+            level=xbmc.LOGDEBUG,
+        )
+
         if saved:
             self.show_message("Saved {}/10 to {}".format(rating, " & ".join(saved)))
+        elif self.rating_save_error:
+            self.show_message("Could not save rating ({})".format(self.rating_save_error), error=True)
 
     def onAVStarted(self):
         xbmc.log("MDBList Scrobbler: onAVStarted", level=xbmc.LOGDEBUG)
