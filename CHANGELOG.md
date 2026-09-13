@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.6] - 2026-09-13
+
+* Fixed the rating prompt's "Save to MDBList" being controlled by the Sync settings' ratings toggle (unrelated to the prompt, and off by default) -- it's now its own "Save to MDBList" setting in the Rating category, alongside "Save to Kodi library", so enabling the rating prompt is enough on its own.
+* Fixed the rating prompt showing no feedback at all when nothing could actually be saved (no supported provider IDs on a non-library/plugin-streamed item, an API error, or a sync running at the same moment) -- it now shows an error notification and logs the specific reason.
+
 ## [1.3.5] - 2026-09-09
 
 * Fixed the addon taking 5+ seconds to stop on every Kodi quit, forcing Kodi to kill it instead of a clean shutdown -- its background sync/activity/ratings polling threads are now stopped as soon as shutdown begins.
