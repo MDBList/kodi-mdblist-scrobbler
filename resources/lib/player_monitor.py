@@ -273,6 +273,11 @@ class PlayerMonitor(xbmc.Player):
         if media_type in ("movie", "episode"):
             return media_type
 
+        # Live TV: the EPG programme's title plus the PVR's own uniqueid would
+        # otherwise read as a movie below
+        if media_type == "channel" or (item.get("file") or "").startswith("pvr://channels/"):
+            return media_type
+
         season = item.get("season")
         episode = item.get("episode")
         if season not in (None, -1, "") or episode not in (None, -1, ""):
@@ -372,6 +377,10 @@ class PlayerMonitor(xbmc.Player):
             )
             self.video_info["type"] = inferred_media_type
             media_type = inferred_media_type
+            # Kodi's id belongs to its own type's table (a channel, a plugin
+            # item), never a library movie/episode -- rating it as one would
+            # overwrite an unrelated library item's rating
+            self.video_info["id"] = -1
 
         item_id = self.video_info.get("id")
         uniqueid = self.video_info.get("uniqueid", {})
@@ -485,6 +494,9 @@ class PlayerMonitor(xbmc.Player):
             if not self.get_bool_setting("rating.save.mdblist", True):
                 xbmc.log("MDBList Scrobbler: Skipping rating prompt, item is not in Kodi library and saving to MDBList is disabled", level=xbmc.LOGDEBUG)
                 return False
+            if not self.mdblist_rating_ids():
+                xbmc.log("MDBList Scrobbler: Skipping rating prompt, item is not in Kodi library and has no IDs MDBList supports", level=xbmc.LOGDEBUG)
+                return False
             xbmc.log("MDBList Scrobbler: Item not in Kodi library, Kodi rating will be skipped but MDBList rating can proceed", level=xbmc.LOGDEBUG)
 
         if library_id not in (None, -1) and self.get_bool_setting("rating.prompt.unrated_only", True):
@@ -506,6 +518,20 @@ class PlayerMonitor(xbmc.Player):
             progress_percent = 100.0
 
         return progress_percent >= float(self.get_int_setting("rating.prompt.progress", 90))
+
+    def mdblist_rating_ids(self):
+        """The ids save_mdblist_rating would rate this item by: the movie's,
+        or the show's (falling back to the episode's own) -- empty when
+        MDBList couldn't identify it."""
+        media_type = self.video_info.get("type")
+        if media_type == "movie":
+            return fix_unique_ids(self.video_info.get("uniqueid", {}), "movie")
+        if media_type == "episode":
+            return (
+                fix_unique_ids(self.video_info.get("tvshow", {}).get("uniqueid", {}), "episode")
+                or fix_unique_ids(self.video_info.get("uniqueid", {}), "episode")
+            )
+        return {}
 
     def save_kodi_rating(self, rating: int):
         if not self.get_bool_setting("rating.save.kodi", True):
@@ -543,16 +569,14 @@ class PlayerMonitor(xbmc.Player):
         media_type = self.video_info.get("type")
 
         if media_type == "movie":
-            movie_ids = fix_unique_ids(self.video_info.get("uniqueid", {}), "movie")
+            movie_ids = self.mdblist_rating_ids()
             if not movie_ids:
                 xbmc.log("MDBList Scrobbler: Cannot rate movie on MDBList, no supported IDs", level=xbmc.LOGWARNING)
                 self.rating_save_error = "no supported IDs for MDBList"
                 return False
             record = {"dbtype": "movie", "ids": movie_ids, "userrating": rating}
         elif media_type == "episode":
-            show_ids = fix_unique_ids(self.video_info.get("tvshow", {}).get("uniqueid", {}), "episode")
-            if not show_ids:
-                show_ids = fix_unique_ids(self.video_info.get("uniqueid", {}), "episode")
+            show_ids = self.mdblist_rating_ids()
             if not show_ids:
                 xbmc.log("MDBList Scrobbler: Cannot rate episode on MDBList, no supported show IDs", level=xbmc.LOGWARNING)
                 self.rating_save_error = "no supported show IDs for MDBList"
