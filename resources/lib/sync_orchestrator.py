@@ -168,8 +168,14 @@ def run(notify=False, allow_remove=False):
             server_time = fetch_last_activities().get("server_time")
 
             if watched_enabled:
-                summary["watched_push"] = watched_sync.push(snapshot, allow_remove=allow_remove)
-                summary["watched_pull"] = watched_sync.pull(snapshot, server_time, trusted=allow_remove)
+                if not sync_state.get_known_items(watched_sync.CATEGORY):
+                    # First sync: pull first so push() only sends what MDBList
+                    # doesn't already have -- see watched_sync.pull's seed
+                    summary["watched_pull"] = watched_sync.pull(snapshot, server_time, seed=True)
+                    summary["watched_push"] = watched_sync.push(snapshot, allow_remove=allow_remove)
+                else:
+                    summary["watched_push"] = watched_sync.push(snapshot, allow_remove=allow_remove)
+                    summary["watched_pull"] = watched_sync.pull(snapshot, server_time, trusted=allow_remove)
 
             if ratings_enabled:
                 summary["ratings_push"] = ratings_sync.push(snapshot, allow_remove=allow_remove)

@@ -230,15 +230,15 @@ def _apply_episode_entry(snapshot, show_ids, season, episode, status, remote_at,
     return _apply_watched(match, status, remote_at, changes), key
 
 
-def _pull_full(snapshot, server_time, trusted=False):
+def _pull_full(snapshot, server_time, trusted=False, seed=False):
     changes = _new_pull_changes()
     try:
-        return _pull_full_apply(snapshot, server_time, trusted, changes)
+        return _pull_full_apply(snapshot, server_time, trusted, seed, changes)
     finally:
         _persist_pull_changes(changes)
 
 
-def _pull_full_apply(snapshot, server_time, trusted, changes):
+def _pull_full_apply(snapshot, server_time, trusted, seed, changes):
     # extended=None (full, not ids_only): ids_only only exposes a movie's
     # tmdb id (and an episode's parent show's tmdb id). A local item
     # identified only by imdb/tvdb/trakt/mdblist couldn't be matched or ruled
@@ -303,6 +303,10 @@ def _pull_full_apply(snapshot, server_time, trusted, changes):
             if key:
                 locally_watched.append((episode, key))
 
+    # A seed pull runs before this device's first push, so anything watched
+    # only locally simply hasn't been pushed yet -- not unwatched remotely.
+    if seed:
+        locally_watched = []
     candidate_removals = [(record, key) for record, key in locally_watched if key not in matched_keys]
     remote_count = len(data.get("movies", [])) + len(data.get("episodes", []))
     hold_removals = bool(candidate_removals) and _should_hold_pull_removals(
@@ -430,7 +434,7 @@ def _pull_incremental_apply(snapshot, entries, server_time, changes):
     return {"pulled_applied": applied, "mode": "incremental"}
 
 
-def pull(snapshot, server_time, trusted=False):
+def pull(snapshot, server_time, trusted=False, seed=False):
     """server_time: /sync/last_activities' own server_time -- a
     safety-margined timestamp meant to be persisted as the next watermark,
     rather than the device's own clock, which can drift and under-cover the
@@ -442,7 +446,17 @@ def pull(snapshot, server_time, trusted=False):
     stays safe; only run()'s allow_remove (24h backstop, manual "Sync now")
     should pass True. _pull_incremental doesn't need this: it applies
     explicit per-item journal events, not a "known minus current-read"
-    diff, so it isn't the failure mode this pattern guards against."""
+    diff, so it isn't the failure mode this pattern guards against.
+
+    seed: first sync on this device (no known items yet) -- always a full
+    pull, with no removal reconcile, run before push() so it records what
+    MDBList already has. Without it the first push re-sends the whole local
+    history, and every Kodi lastplayed that differs from MDBList's stored
+    timestamp rewrites it as a fresh watch (which e.g. un-drops shows)."""
+    if seed:
+        xbmc.log("MDBList Sync: watched pull seeding first sync - running full pull", level=xbmc.LOGDEBUG)
+        return _pull_full(snapshot, server_time, seed=True)
+
     since = sync_state.get_synced_at(CATEGORY)
     if not since:
         xbmc.log("MDBList Sync: watched pull has no cursor - running full pull", level=xbmc.LOGDEBUG)
