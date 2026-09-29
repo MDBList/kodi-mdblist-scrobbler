@@ -622,7 +622,13 @@ class PlayerMonitor(xbmc.Player):
             level=xbmc.LOGDEBUG,
         )
 
-        if saved:
+        if saved and self.rating_save_error:
+            # Saved to one side only (e.g. Kodi, but the MDBList request
+            # failed): say so, since nothing retries it later
+            self.show_message(
+                "Saved {}/10 to {}, but {}".format(rating, " & ".join(saved), self.rating_save_error), error=True
+            )
+        elif saved:
             self.show_message("Saved {}/10 to {}".format(rating, " & ".join(saved)))
         elif self.rating_save_error:
             self.show_message("Could not save rating ({})".format(self.rating_save_error), error=True)
