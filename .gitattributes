@@ -1,0 +1,11 @@
+# Left out of the addon zip submitted to the official Kodi repository
+# (git archive, used by .github/workflows/kodi-submit.yml)
+.gitattributes export-ignore
+.gitignore export-ignore
+.github export-ignore
+.claude export-ignore
+.python-version export-ignore
+pyproject.toml export-ignore
+uv.lock export-ignore
+README.md export-ignore
+CHANGELOG.md export-ignore

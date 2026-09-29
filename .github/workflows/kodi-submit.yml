@@ -1,0 +1,37 @@
+name: Submit to official Kodi repository
+
+# Every version tag opens a pull request on xbmc/repo-plugins for each Kodi
+# branch below, from the linaspurinis/repo-plugins fork. Needs repo secrets
+# GH_TOKEN (classic PAT with public_repo, of the fork's owner) and EMAIL.
+on:
+  push:
+    tags:
+      - '*'
+  # Manual run (Actions tab -> Run workflow): submits the version in addon.xml
+  # of the chosen branch, e.g. to resubmit after a rejected PR.
+  workflow_dispatch:
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    strategy:
+      # One at a time: both push branches to the same fork
+      max-parallel: 1
+      matrix:
+        kodi-version: [omega, piers]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Submit service.mdblist-scrobbler to ${{ matrix.kodi-version }}
+        uses: xbmc/action-kodi-addon-submitter@v1.3
+        with:
+          kodi-repository: repo-plugins
+          kodi-version: ${{ matrix.kodi-version }}
+          addon-id: service.mdblist-scrobbler
+          kodi-matrix: false
+          sub-directory: false
+        env:
+          GH_USERNAME: linaspurinis
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          EMAIL: ${{ secrets.EMAIL }}
