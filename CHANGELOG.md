@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.8] - 2026-09-29
+
+* Fixed an item unwatched in MDBList staying watched: after a sync pulled a watched state from MDBList, the next sync pushed it back as a new local watch, undoing a later unwatch in MDBList. Pulled changes are now recorded as synced.
+
 ## [1.3.7] - 2026-09-29
 
 * Scrobbles and watched sync now send each episode's own tvdb/tmdb id, so MDBList records the exact episode even when the library numbers it differently from TMDb (common for anime with TheTVDB metadata). Season/episode numbers remain the fallback.
