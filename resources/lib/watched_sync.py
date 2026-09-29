@@ -32,6 +32,7 @@ def _movie_item(movie):
 def _episode_item(episode):
     return {
         "type": "episode", "show_ids": episode["show_ids"],
+        "episode_ids": episode.get("episode_ids") or {},
         "season": episode["season"], "episode": episode["episode"],
         "watched_at": _to_api_datetime(episode["lastplayed"]),
     }

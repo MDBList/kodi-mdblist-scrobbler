@@ -131,20 +131,25 @@ class PlayerMonitor(xbmc.Player):
 
         if media_type == "episode":
             show_ids = fix_unique_ids(self.video_info.get("tvshow", {}).get("uniqueid", {}), media_type)
+            # The episode's own ids (TVDB/TMDb episode id) let MDBList resolve the
+            # exact episode even when the library numbers it differently from TMDb
+            # (TVDB-ordered anime). Not when they had to stand in for the show ids.
+            episode_ids = fix_unique_ids(self.video_info.get("uniqueid", {}), media_type) if show_ids else {}
             if not show_ids:
                 show_ids = fix_unique_ids(self.video_info.get("uniqueid", {}), media_type)
             if not show_ids:
                 xbmc.log("MDBList Scrobbler: Skipping episode scrobble, no supported show IDs found", level=xbmc.LOGWARNING)
                 return None
 
+            episode_ref = {"number": self.video_info.get("episode")}
+            if episode_ids:
+                episode_ref["ids"] = episode_ids
             return {
                 "show": {
                     "ids": show_ids,
                     "season": {
                         "number": self.video_info.get("season"),
-                        "episode": {
-                            "number": self.video_info.get("episode")
-                        }
+                        "episode": episode_ref,
                     }
                 },
                 "progress": progress_percent,
