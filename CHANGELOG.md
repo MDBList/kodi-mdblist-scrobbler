@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.9] - 2026-09-29
+
+* Fixed ratings changed or removed in MDBList being pushed back: after a sync pulled a rating from MDBList, the next sync sent it back as a new local rating, which could undo a later change there. Pulled ratings are now recorded as synced.
+
 ## [1.3.8] - 2026-09-29
 
 * Fixed an item unwatched in MDBList staying watched: after a sync pulled a watched state from MDBList, the next sync pushed it back as a new local watch, undoing a later unwatch in MDBList. Pulled changes are now recorded as synced.
