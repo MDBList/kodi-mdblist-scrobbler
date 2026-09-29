@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.10] - 2026-09-29
+
+* Fixed a watch then unwatch (or rating then removal) pulled from MDBList in the same sync only applying the first change.
+* Fixed changes pulled before a failed sync being pushed back on the next sync; they are now recorded as synced even when a later item fails.
+* The rating prompt now reports when saving to MDBList failed instead of showing a plain success.
+
 ## [1.3.9] - 2026-09-29
 
 * Fixed ratings changed or removed in MDBList being pushed back: after a sync pulled a rating from MDBList, the next sync sent it back as a new local rating, which could undo a later change there. Pulled ratings are now recorded as synced.
