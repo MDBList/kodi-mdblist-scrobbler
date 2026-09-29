@@ -129,7 +129,37 @@ def _set_watched(record, playcount, lastplayed=None):
         jsonrpc_request("VideoLibrary.SetEpisodeDetails", dict(params, episodeid=record["dbid"]))
 
 
-def _apply_watched(record, status, remote_at):
+def _new_pull_changes():
+    """Known-items changes from one pull run: what it made watched (upserts)
+    and unwatched (removed) in Kodi -- see _record_pulled."""
+    return {"upserts": {}, "removed": set()}
+
+
+def _record_pulled(changes, record, watched, lastplayed=None):
+    """Records what an applied pull change makes MDBList and Kodi agree on, in
+    the known-items state. Without it the next push diffs a pulled watch as a
+    new local one and pushes it back -- undoing a later remote unwatch."""
+    if changes is None:
+        return
+    key = _canonical_key(record)
+    if not key:
+        return
+    if watched:
+        # Built the way the next push reads the library, so it sees nothing new
+        updated = dict(record, lastplayed=lastplayed)
+        changes["upserts"][key] = _movie_item(updated) if record["dbtype"] == "movie" else _episode_item(updated)
+        changes["removed"].discard(key)
+    else:
+        changes["removed"].add(key)
+        changes["upserts"].pop(key, None)
+
+
+def _persist_pull_changes(changes):
+    if changes["upserts"] or changes["removed"]:
+        sync_state.merge_known_items(CATEGORY, changes["upserts"], list(changes["removed"]))
+
+
+def _apply_watched(record, status, remote_at, changes=None):
     """Last-write-wins using Kodi's lastplayed vs the remote timestamp -- the
     one sync category where Kodi actually tracks a comparable local
     timestamp, so real conflict resolution (not just remote-wins) applies.
@@ -149,6 +179,7 @@ def _apply_watched(record, status, remote_at):
         if local_ts and remote_ts and local_ts > remote_ts:
             return False
         _set_watched(record, playcount=0)
+        _record_pulled(changes, record, watched=False)
         return True
 
     if record["playcount"] > 0 and local_ts and remote_ts and local_ts > remote_ts:
@@ -156,20 +187,21 @@ def _apply_watched(record, status, remote_at):
 
     new_lastplayed = utc_iso_to_local_time(remote_at) or record.get("lastplayed")
     _set_watched(record, playcount=max(record["playcount"], 1), lastplayed=new_lastplayed)
+    _record_pulled(changes, record, watched=True, lastplayed=new_lastplayed)
     return True
 
 
-def _apply_movie_entry(snapshot, ids, status, remote_at):
+def _apply_movie_entry(snapshot, ids, status, remote_at, changes=None):
     """Returns (applied, canonical_key) -- the key (None if no local match)
     lets _pull_full track which locally-watched items the remote list
     actually mentioned, to reconcile removals for the rest."""
     match = library_snapshot.find_movie_match(snapshot, ids)
     if not match:
         return False, None
-    return _apply_watched(match, status, remote_at), library_snapshot.canonical_movie_key(match["ids"])
+    return _apply_watched(match, status, remote_at, changes), library_snapshot.canonical_movie_key(match["ids"])
 
 
-def _apply_episode_entry(snapshot, show_ids, season, episode, status, remote_at, episode_ids=None):
+def _apply_episode_entry(snapshot, show_ids, season, episode, status, remote_at, episode_ids=None, changes=None):
     match = library_snapshot.find_episode_match(snapshot, show_ids, season, episode, episode_ids)
     if not match:
         xbmc.log(
@@ -182,7 +214,7 @@ def _apply_episode_entry(snapshot, show_ids, season, episode, status, remote_at,
         )
         return False, None
     key = library_snapshot.canonical_episode_key(match["show_ids"], match["season"], match["episode"])
-    return _apply_watched(match, status, remote_at), key
+    return _apply_watched(match, status, remote_at, changes), key
 
 
 def _pull_full(snapshot, server_time, trusted=False):
@@ -202,12 +234,13 @@ def _pull_full(snapshot, server_time, trusted=False):
 
     applied = 0
     matched_keys = set()
+    changes = _new_pull_changes()
 
     for entry in data.get("movies", []):
         ids = (entry.get("movie") or {}).get("ids") or {}
         if not ids:
             continue
-        applied_ok, key = _apply_movie_entry(snapshot, ids, "active", entry.get("last_watched_at"))
+        applied_ok, key = _apply_movie_entry(snapshot, ids, "active", entry.get("last_watched_at"), changes)
         if key:
             matched_keys.add(key)
         if applied_ok:
@@ -220,7 +253,7 @@ def _pull_full(snapshot, server_time, trusted=False):
             continue
         applied_ok, key = _apply_episode_entry(
             snapshot, show_ids, episode.get("season"), episode.get("number"),
-            "active", entry.get("last_watched_at"), episode.get("ids"),
+            "active", entry.get("last_watched_at"), episode.get("ids"), changes,
         )
         if key:
             matched_keys.add(key)
@@ -264,8 +297,10 @@ def _pull_full(snapshot, server_time, trusted=False):
         # correctly win the conflict-resolution check in _apply_watched.
         removal_at = server_time or _now_iso()
         for record, _key in candidate_removals:
-            if _apply_watched(record, "removed", removal_at):
+            if _apply_watched(record, "removed", removal_at, changes):
                 applied += 1
+
+    _persist_pull_changes(changes)
 
     if hold_removals:
         # Held, not dropped -- don't advance the watermark either, so the
@@ -323,6 +358,7 @@ def _should_hold_pull_removals(remote_count, candidate_count, known_count, trust
 def _pull_incremental(snapshot, entries, server_time):
     applied = 0
     skipped_type = 0
+    changes = _new_pull_changes()
     for entry in entries:
         if entry.get("category") != "watched":
             continue
@@ -340,13 +376,13 @@ def _pull_incremental(snapshot, entries, server_time):
         remote_at = entry.get("value_at") or entry.get("action_at")
 
         if entry.get("item_type") == "movie":
-            applied_ok, _key = _apply_movie_entry(snapshot, ids, status, remote_at)
+            applied_ok, _key = _apply_movie_entry(snapshot, ids, status, remote_at, changes)
             if applied_ok:
                 applied += 1
         elif entry.get("item_type") == "episode":
             episode_ids = library_snapshot.journal_episode_ids(entry)
             applied_ok, _key = _apply_episode_entry(
-                snapshot, ids, entry.get("season"), entry.get("episode"), status, remote_at, episode_ids,
+                snapshot, ids, entry.get("season"), entry.get("episode"), status, remote_at, episode_ids, changes,
             )
             if applied_ok:
                 applied += 1
@@ -362,6 +398,7 @@ def _pull_incremental(snapshot, entries, server_time):
             level=xbmc.LOGDEBUG,
         )
 
+    _persist_pull_changes(changes)
     sync_state.set_synced_at(CATEGORY, server_time or _now_iso())
     return {"pulled_applied": applied, "mode": "incremental"}
 
