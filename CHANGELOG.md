@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.7] - 2026-09-29
+
+* Scrobbles and watched sync now send each episode's own tvdb/tmdb id, so MDBList records the exact episode even when the library numbers it differently from TMDb (common for anime with TheTVDB metadata). Season/episode numbers remain the fallback.
+
 ## [1.3.6] - 2026-09-13
 
 * Fixed the rating prompt's "Save to MDBList" being controlled by the Sync settings' ratings toggle (unrelated to the prompt, and off by default) -- it's now its own "Save to MDBList" setting in the Rating category, alongside "Save to Kodi library", so enabling the rating prompt is enough on its own.
