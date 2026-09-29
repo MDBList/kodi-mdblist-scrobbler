@@ -155,8 +155,13 @@ def _record_pulled(changes, record, watched, lastplayed=None):
 
 
 def _persist_pull_changes(changes):
+    """Saves and clears the collected changes -- called before the watermark
+    advances, and again (a no-op then) from a finally, so an error on a later
+    item doesn't lose what earlier items already changed in Kodi."""
     if changes["upserts"] or changes["removed"]:
         sync_state.merge_known_items(CATEGORY, changes["upserts"], list(changes["removed"]))
+        changes["upserts"].clear()
+        changes["removed"].clear()
 
 
 def _apply_watched(record, status, remote_at, changes=None):
@@ -175,10 +180,16 @@ def _apply_watched(record, status, remote_at, changes=None):
 
     if status == "removed":
         if record["playcount"] <= 0:
+            # Already unwatched here (e.g. applied by an earlier, interrupted
+            # pull): still record it as synced
+            _record_pulled(changes, record, watched=False)
             return False
         if local_ts and remote_ts and local_ts > remote_ts:
             return False
         _set_watched(record, playcount=0)
+        # Keep the snapshot current, so a later entry for this item in the
+        # same batch (watched, then unwatched) compares against this state
+        record["playcount"] = 0
         _record_pulled(changes, record, watched=False)
         return True
 
@@ -187,6 +198,8 @@ def _apply_watched(record, status, remote_at, changes=None):
 
     new_lastplayed = utc_iso_to_local_time(remote_at) or record.get("lastplayed")
     _set_watched(record, playcount=max(record["playcount"], 1), lastplayed=new_lastplayed)
+    record["playcount"] = max(record["playcount"], 1)
+    record["lastplayed"] = new_lastplayed
     _record_pulled(changes, record, watched=True, lastplayed=new_lastplayed)
     return True
 
@@ -218,6 +231,14 @@ def _apply_episode_entry(snapshot, show_ids, season, episode, status, remote_at,
 
 
 def _pull_full(snapshot, server_time, trusted=False):
+    changes = _new_pull_changes()
+    try:
+        return _pull_full_apply(snapshot, server_time, trusted, changes)
+    finally:
+        _persist_pull_changes(changes)
+
+
+def _pull_full_apply(snapshot, server_time, trusted, changes):
     # extended=None (full, not ids_only): ids_only only exposes a movie's
     # tmdb id (and an episode's parent show's tmdb id). A local item
     # identified only by imdb/tvdb/trakt/mdblist couldn't be matched or ruled
@@ -234,7 +255,6 @@ def _pull_full(snapshot, server_time, trusted=False):
 
     applied = 0
     matched_keys = set()
-    changes = _new_pull_changes()
 
     for entry in data.get("movies", []):
         ids = (entry.get("movie") or {}).get("ids") or {}
@@ -356,9 +376,16 @@ def _should_hold_pull_removals(remote_count, candidate_count, known_count, trust
 
 
 def _pull_incremental(snapshot, entries, server_time):
+    changes = _new_pull_changes()
+    try:
+        return _pull_incremental_apply(snapshot, entries, server_time, changes)
+    finally:
+        _persist_pull_changes(changes)
+
+
+def _pull_incremental_apply(snapshot, entries, server_time, changes):
     applied = 0
     skipped_type = 0
-    changes = _new_pull_changes()
     for entry in entries:
         if entry.get("category") != "watched":
             continue

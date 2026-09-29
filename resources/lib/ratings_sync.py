@@ -143,14 +143,27 @@ def _record_pulled(changes, record, rating):
 
 
 def _persist_pull_changes(changes):
+    """Saves and clears the collected changes -- called before the watermark
+    advances, and again (a no-op then) from a finally, so an error on a later
+    item doesn't lose what earlier items already changed in Kodi."""
     if changes["upserts"] or changes["removed"]:
         sync_state.merge_known_items(CATEGORY, changes["upserts"], list(changes["removed"]))
+        changes["upserts"].clear()
+        changes["removed"].clear()
 
 
 def _apply_rating(match, rating, changes):
-    if not match or match["userrating"] == rating:
+    if not match:
+        return False
+    if match["userrating"] == rating:
+        # Already matches (e.g. applied by an earlier, interrupted pull): still
+        # record it as synced
+        _record_pulled(changes, match, rating)
         return False
     _set_rating(match, rating)
+    # Keep the snapshot current, so a later entry for this item in the same
+    # batch (rated, then un-rated) compares against this state
+    match["userrating"] = rating
     _record_pulled(changes, match, rating)
     return True
 
@@ -165,6 +178,14 @@ def _apply_episode_rating(snapshot, show_ids, season, episode, rating, episode_i
 
 
 def _pull_full(snapshot, server_time):
+    changes = _new_pull_changes()
+    try:
+        return _pull_full_apply(snapshot, server_time, changes)
+    finally:
+        _persist_pull_changes(changes)
+
+
+def _pull_full_apply(snapshot, server_time, changes):
     # extended=None (full, not ids_only) -- MDBList's ids_only ratings response
     # only carries the episode's own tmdb id, not season/episode/show, so it
     # can't be matched against the Kodi library the way ids_only works for /sync/watched.
@@ -177,7 +198,6 @@ def _pull_full(snapshot, server_time):
     )
 
     applied = 0
-    changes = _new_pull_changes()
 
     for entry in data.get("movies", []):
         ids = (entry.get("movie") or {}).get("ids") or {}
@@ -199,9 +219,16 @@ def _pull_full(snapshot, server_time):
 
 
 def _pull_incremental(snapshot, entries, server_time):
+    changes = _new_pull_changes()
+    try:
+        return _pull_incremental_apply(snapshot, entries, server_time, changes)
+    finally:
+        _persist_pull_changes(changes)
+
+
+def _pull_incremental_apply(snapshot, entries, server_time, changes):
     applied = 0
     skipped_type = 0
-    changes = _new_pull_changes()
     for entry in entries:
         if entry.get("category") != JOURNAL_CATEGORY:
             continue
