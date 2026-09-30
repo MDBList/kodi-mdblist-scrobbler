@@ -346,14 +346,17 @@ def _pull_full_apply(snapshot, server_time, trusted, seed, changes):
 
     _persist_pull_changes(changes)
 
-    if hold_removals:
-        # Held, not dropped -- don't advance the watermark either, so the
-        # next pull retries a full reconcile from scratch (and, per pull(),
-        # keeps landing back here) instead of downgrading to the incremental
-        # journal path and never revisiting these items.
-        return {"pulled_applied": applied, "mode": "full", "skipped_remove": len(candidate_removals)}
-
+    # The watermark advances even when removals are held: the adds above are
+    # applied, and later untrusted runs can follow the journal incrementally.
+    # Leaving it unset made every activity poll re-run this full pull (and
+    # hold again) until a trusted run came along. The held removals aren't
+    # dropped -- the pending flag makes the next trusted run (see pull())
+    # redo this full reconcile.
     sync_state.set_synced_at(CATEGORY, server_time or _now_iso())
+    sync_state.set_full_reconcile_pending(CATEGORY, hold_removals)
+
+    if hold_removals:
+        return {"pulled_applied": applied, "mode": "full", "skipped_remove": len(candidate_removals)}
     return {"pulled_applied": applied, "mode": "full"}
 
 
@@ -480,6 +483,13 @@ def pull(snapshot, server_time, trusted=False, seed=False):
     since = sync_state.get_synced_at(CATEGORY)
     if not since:
         xbmc.log("MDBList Sync: watched pull has no cursor - running full pull", level=xbmc.LOGDEBUG)
+        return _pull_full(snapshot, server_time, trusted)
+
+    if trusted and sync_state.get_full_reconcile_pending(CATEGORY):
+        xbmc.log(
+            "MDBList Sync: watched pull has held removals from an earlier run - running full pull",
+            level=xbmc.LOGDEBUG,
+        )
         return _pull_full(snapshot, server_time, trusted)
 
     journal = mdblist_api.fetch_journal(since=since)
