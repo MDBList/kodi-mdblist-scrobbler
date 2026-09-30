@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.11] - 2026-09-30
+
+* Fixed the first two-way watched sync sending your whole Kodi watch history to MDBList, which re-dated watches and could un-drop dropped shows. It now pulls MDBList's history first and only sends what MDBList doesn't have.
+* Fixed watched dates pulled from MDBList sometimes being saved in Kodi one second early, which made later syncs send them back as new watches.
+* Watched dates that differ from the last synced value by a minute or less are no longer sent as new watches, so installs upgraded from older versions stop re-sending their history.
+* Fixed live TV being scrobbled as a movie and showing the rating prompt when stopped.
+* Fixed PVR recordings possibly being scrobbled or rated as an unrelated movie.
+
 ## [1.3.10] - 2026-09-29
 
 * Fixed a watch then unwatch (or rating then removal) pulled from MDBList in the same sync only applying the first change.
