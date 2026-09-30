@@ -67,8 +67,23 @@ def _push_remove(items):
     sync_payload.push_items_remove(CATEGORY, "/sync/watched/remove", items)
 
 
+# A rewatch moves lastplayed by far more than this. Smaller differences are
+# drift, not a new watch -- e.g. up to 1.3.10 a pulled date could be written
+# back a second early, and <1.3.8 didn't record it, so the saved state of an
+# upgraded install still differs from Kodi by a few seconds per item.
+WATCHED_AT_TOLERANCE_SECONDS = 60
+
+
 def _watched_at_changed(known_item, item):
-    return known_item.get("watched_at") != item.get("watched_at")
+    known, current = known_item.get("watched_at"), item.get("watched_at")
+    if known == current:
+        return False
+    try:
+        delta = datetime.datetime.strptime(known[:19], "%Y-%m-%dT%H:%M:%S") - \
+            datetime.datetime.strptime(current[:19], "%Y-%m-%dT%H:%M:%S")
+    except (TypeError, ValueError):
+        return True
+    return abs(delta.total_seconds()) > WATCHED_AT_TOLERANCE_SECONDS
 
 
 def push(snapshot, allow_remove=False):
@@ -103,7 +118,7 @@ def push_single(record):
 
     if is_watched:
         item = _movie_item(record) if record["dbtype"] == "movie" else _episode_item(record)
-        if known_item and known_item.get("watched_at") == item.get("watched_at"):
+        if known_item and not _watched_at_changed(known_item, item):
             return {}
         _push_add([item])
         return {"pushed_add": 1}
