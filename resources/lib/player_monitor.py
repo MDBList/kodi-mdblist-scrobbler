@@ -366,6 +366,13 @@ class PlayerMonitor(xbmc.Player):
 
         self.apply_tmdb_helper_fallback()
 
+        # A PVR item's "unknown" uniqueid is the backend's own id (channel,
+        # broadcast, recording) -- fix_unique_ids would coerce a numeric one
+        # to a TMDb id and scrobble/rate an unrelated movie
+        uniqueid = self.video_info.get("uniqueid")
+        if (self.video_info.get("file") or "").startswith("pvr://") and isinstance(uniqueid, dict) and "unknown" in uniqueid:
+            self.video_info["uniqueid"] = {key: value for key, value in uniqueid.items() if key != "unknown"}
+
         media_type = self.video_info.get("type")
         inferred_media_type = self.infer_media_type(self.video_info)
         if inferred_media_type != media_type:
