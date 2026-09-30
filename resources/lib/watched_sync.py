@@ -212,6 +212,11 @@ def _apply_watched(record, status, remote_at, changes=None):
         return False
 
     new_lastplayed = utc_iso_to_local_time(remote_at) or record.get("lastplayed")
+    if record["playcount"] > 0 and (record.get("lastplayed") or "")[:19] == new_lastplayed:
+        # Already exactly this in Kodi: skip the write, or every full pull
+        # rewrites the whole library (thousands of rows in a shared MySQL DB)
+        _record_pulled(changes, record, watched=True, lastplayed=new_lastplayed)
+        return False
     _set_watched(record, playcount=max(record["playcount"], 1), lastplayed=new_lastplayed)
     record["playcount"] = max(record["playcount"], 1)
     record["lastplayed"] = new_lastplayed
