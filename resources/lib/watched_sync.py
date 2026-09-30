@@ -38,6 +38,12 @@ def _episode_item(episode):
     }
 
 
+def _describe(record):
+    if record["dbtype"] == "movie":
+        return "movie '{}' ({})".format(record.get("title"), _canonical_key(record))
+    return "episode '{}' ({})".format(record.get("title"), _canonical_key(record))
+
+
 def _canonical_key(record):
     if record["dbtype"] == "movie":
         return library_snapshot.canonical_movie_key(record["ids"])
@@ -121,11 +127,13 @@ def push_single(record):
         if known_item and not _watched_at_changed(known_item, item):
             return {}
         _push_add([item])
+        xbmc.log("MDBList Sync: live push marked {} watched".format(_describe(record)), level=xbmc.LOGDEBUG)
         return {"pushed_add": 1}
 
     if not known_item:
         return {}
     _push_remove([known_item])
+    xbmc.log("MDBList Sync: live push marked {} unwatched".format(_describe(record)), level=xbmc.LOGDEBUG)
     return {"pushed_remove": 1}
 
 
@@ -332,6 +340,15 @@ def _pull_full_apply(snapshot, server_time, trusted, seed, changes):
     hold_removals = bool(candidate_removals) and _should_hold_pull_removals(
         remote_count, len(candidate_removals), len(locally_watched), trusted
     )
+
+    if hold_removals:
+        for record, _key in candidate_removals:
+            xbmc.log(
+                "MDBList Sync: watched pull held removal of {} - watched in Kodi, not on MDBList".format(
+                    _describe(record)
+                ),
+                level=xbmc.LOGDEBUG,
+            )
 
     if candidate_removals and not hold_removals:
         # The removal timestamp is the server-provided watermark, not "now":
