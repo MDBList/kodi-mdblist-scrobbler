@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.12] - 2026-09-30
+
+* Fixed every sync check that saw new activity running a slow full watched sync, after a sync that held back unwatching items (e.g. right after an update). Regular checks now stay incremental; held items are rechecked on the daily or manual sync.
+* Fixed full watched syncs rewriting every already-synced item in the Kodi library, which was slow and put heavy load on shared MySQL libraries.
+* The debug log now names each item whose unwatch is held back, and each watched/unwatched change sent to MDBList right away.
+
 ## [1.3.11] - 2026-09-30
 
 * Fixed the first two-way watched sync sending your whole Kodi watch history to MDBList, which re-dated watches and could un-drop dropped shows. It now pulls MDBList's history first and only sends what MDBList doesn't have.
