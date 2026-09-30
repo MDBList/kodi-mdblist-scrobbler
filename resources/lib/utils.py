@@ -114,7 +114,11 @@ def fix_unique_ids(unique_ids: dict, media_type: str):
 
 
 def _local_utc_offset():
-    return datetime.datetime.now() - datetime.datetime.utcnow()
+    # The two clock reads land microseconds apart, which (truncated by
+    # strftime) put a converted timestamp a second early; real UTC offsets
+    # are whole minutes
+    offset = datetime.datetime.now() - datetime.datetime.utcnow()
+    return datetime.timedelta(minutes=round(offset.total_seconds() / 60))
 
 
 def local_time_to_utc_iso(value):
