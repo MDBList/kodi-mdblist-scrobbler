@@ -168,9 +168,13 @@ def run(notify=False, allow_remove=False):
             server_time = fetch_last_activities().get("server_time")
 
             if watched_enabled:
-                if not sync_state.get_known_items(watched_sync.CATEGORY):
+                if not sync_state.get_known_items(watched_sync.CATEGORY) and \
+                        not sync_state.get_synced_at(watched_sync.CATEGORY):
                     # First sync: pull first so push() only sends what MDBList
-                    # doesn't already have -- see watched_sync.pull's seed
+                    # doesn't already have -- see watched_sync.pull's seed. The
+                    # seed pull sets the cursor, so a device whose known items
+                    # stay empty (nothing watched or matched) isn't re-seeded
+                    # with a full pull every run.
                     summary["watched_pull"] = watched_sync.pull(snapshot, server_time, seed=True)
                     summary["watched_push"] = watched_sync.push(snapshot, allow_remove=allow_remove)
                 else:
