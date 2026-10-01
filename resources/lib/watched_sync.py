@@ -335,7 +335,19 @@ def _pull_full_apply(snapshot, server_time, trusted, seed, changes):
     # only locally simply hasn't been pushed yet -- not unwatched remotely.
     if seed:
         locally_watched = []
-    candidate_removals = [(record, key) for record, key in locally_watched if key not in matched_keys]
+    # A multi-episode file (e.g. "S10E17-18") is often one episode on TMDB, or
+    # numbered differently there, so its Kodi episodes may never come back as
+    # watched. Kodi keeps the playcount per file, so unwatching one would also
+    # unwatch the rest -- leave them out. A real remote unwatch of them still
+    # arrives through the incremental journal.
+    episodes_per_file = {}
+    for episode in library_snapshot.iter_episodes(snapshot):
+        if episode.get("file"):
+            episodes_per_file[episode["file"]] = episodes_per_file.get(episode["file"], 0) + 1
+    candidate_removals = [
+        (record, key) for record, key in locally_watched
+        if key not in matched_keys and episodes_per_file.get(record.get("file"), 0) <= 1
+    ]
     remote_count = len(data.get("movies", [])) + len(data.get("episodes", []))
     hold_removals = bool(candidate_removals) and _should_hold_pull_removals(
         remote_count, len(candidate_removals), len(locally_watched), trusted
