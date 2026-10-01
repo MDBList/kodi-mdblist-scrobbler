@@ -3,7 +3,7 @@ import datetime
 import xbmc
 
 from resources.lib import library_snapshot, mdblist_api, sync_payload, sync_state
-from resources.lib.utils import jsonrpc_request, local_time_to_utc_iso, utc_iso_to_local_time
+from resources.lib.utils import jsonrpc_request, local_time_to_utc_iso, parse_datetime, utc_iso_to_local_time
 
 CATEGORY = "watched"
 
@@ -85,8 +85,7 @@ def _watched_at_changed(known_item, item):
     if known == current:
         return False
     try:
-        delta = datetime.datetime.strptime(known[:19], "%Y-%m-%dT%H:%M:%S") - \
-            datetime.datetime.strptime(current[:19], "%Y-%m-%dT%H:%M:%S")
+        delta = parse_datetime(known[:19], "%Y-%m-%dT%H:%M:%S") - parse_datetime(current[:19], "%Y-%m-%dT%H:%M:%S")
     except (TypeError, ValueError):
         return True
     return abs(delta.total_seconds()) > WATCHED_AT_TOLERANCE_SECONDS
