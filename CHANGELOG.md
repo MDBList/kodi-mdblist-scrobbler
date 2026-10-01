@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.14] - 2026-10-01
+
+* Fixed the background sync failing every 10 minutes after the addon's settings or Sync now had been used, which kept retrying the same changes from MDBList.
+
 ## [1.3.13] - 2026-10-01
 
 * Fixed the daily or manual sync unwatching episodes stored as one multi-episode file (e.g. S10E17-18), which MDBList counts as one episode or numbers differently. Since Kodi keeps one play count per file, this could unwatch both episodes.
