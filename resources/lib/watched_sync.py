@@ -500,7 +500,7 @@ def pull(snapshot, server_time, trusted=False, seed=False):
     explicit per-item journal events, not a "known minus current-read"
     diff, so it isn't the failure mode this pattern guards against.
 
-    seed: first sync on this device (no known items yet) -- always a full
+    seed: first sync on this device (no cursor yet) -- always a full
     pull, with no removal reconcile, run before push() so it records what
     MDBList already has. Without it the first push re-sends the whole local
     history, and every Kodi lastplayed that differs from MDBList's stored
@@ -511,8 +511,10 @@ def pull(snapshot, server_time, trusted=False, seed=False):
 
     since = sync_state.get_synced_at(CATEGORY)
     if not since:
+        # Never synced: anything watched only locally just hasn't been pushed
+        # yet, so this is a seed pull too -- no removal reconcile.
         xbmc.log("MDBList Sync: watched pull has no cursor - running full pull", level=xbmc.LOGDEBUG)
-        return _pull_full(snapshot, server_time, trusted)
+        return _pull_full(snapshot, server_time, seed=True)
 
     if trusted and sync_state.get_full_reconcile_pending(CATEGORY):
         xbmc.log(
