@@ -116,6 +116,7 @@ All three are configured under **Settings > Sync**, and are off by default:
 | Sync watched status (two-way) | `sync.watched.enabled` |
 | Sync ratings (two-way) | `sync.ratings.enabled` -- also gates the rating prompt's "Save to MDBList" |
 | Sync library/collection status (Kodi to MDBList only) | `sync.collection.enabled` |
+| Also send media info (resolution, HDR, audio) | `sync.collection.media`, default off -- sends each file's media info with the collection; reading it makes full syncs slower on big libraries |
 | Sync after library scan finishes | `sync.on_library_scan`, default on |
 | Sync now | Runs a full sync immediately |
 | Last sync | Read-only status of the most recent run |

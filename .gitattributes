@@ -9,3 +9,4 @@ pyproject.toml export-ignore
 uv.lock export-ignore
 README.md export-ignore
 CHANGELOG.md export-ignore
+tests export-ignore
