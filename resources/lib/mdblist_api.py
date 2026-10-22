@@ -71,7 +71,7 @@ _WRITE_PACER = _RequestPacer(1.1)
 _READ_PACER = _RequestPacer(0.32)
 
 
-def _parse_retry_after(response):
+def parse_retry_after(response):
     """api.mdblist always sends Retry-After as a plain integer second count
     on a 429 (never an HTTP-date), so that's the only form parsed."""
     value = response.headers.get("Retry-After")
@@ -146,7 +146,7 @@ def request(method: str, endpoint: str, params=None, json_data=None):
             raise MDBListApiError(str(exception))
 
         if response.status_code == 429:
-            retry_after = _parse_retry_after(response)
+            retry_after = parse_retry_after(response)
             if retry_after is None:
                 retry_after = DEFAULT_RETRY_AFTER_SECONDS
 
