@@ -112,7 +112,9 @@ def auth_params():
     raise MDBListApiError("Not authenticated. Open addon settings to connect.")
 
 
-def request(method: str, endpoint: str, params=None, json_data=None):
+def request(method: str, endpoint: str, params=None, json_data=None, expected_statuses=()):
+    """expected_statuses: error codes the caller handles itself, logged at
+    debug rather than as errors (still raised)."""
     auth = auth_params()
     url = "{}{}".format(base_url(), endpoint)
 
@@ -170,7 +172,7 @@ def request(method: str, endpoint: str, params=None, json_data=None):
                 "MDBList Scrobbler: API error {} on {} response={}".format(
                     response.status_code, endpoint, response.text[:200]
                 ),
-                level=xbmc.LOGERROR,
+                level=xbmc.LOGDEBUG if response.status_code in expected_statuses else xbmc.LOGERROR,
             )
             raise MDBListApiError(
                 "API Error {}: {}".format(response.status_code, response.text[:80]),
@@ -281,7 +283,14 @@ def fetch_journal(since=None, limit=1000):
         elif since:
             params["since"] = since
 
-        data = request("GET", "/sync/journal", params=params)
+        try:
+            data = request("GET", "/sync/journal", params=params, expected_statuses=(409,))
+        except MDBListApiError as exception:
+            # api.mdblist answers an expired window with a 409 carrying
+            # requires_full_sync, not a 200
+            if exception.status_code == 409:
+                return {"requires_full_sync": True, "entries": []}
+            raise
         if not isinstance(data, dict):
             break
 
