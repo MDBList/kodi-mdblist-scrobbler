@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.16] - 2026-10-28
+
+* Interval scrobbles are now sent every 15 minutes by default instead of every 10 seconds, which used up the daily API limit for some users. The interval is now set in minutes (5 to 60), and existing settings are reset to the new default.
+
 ## [1.3.15] - 2026-10-22
 
 * New: optionally send your files' media info (resolution, HDR, audio, channels, 3D) with collection sync. Off by default; turn it on under Settings > Sync.
