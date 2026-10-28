@@ -47,9 +47,9 @@ After that, connect your MDBList account (or configure an API key) in the addon 
 
 The addon sends HTTP POST requests containing a JSON payload.
 
-A request is sent once the playback starts, pauses, resumes or stops.
+A request is sent once the playback starts, pauses, resumes, seeks or stops.
 
-Additionally to that, it's also possible to regularly send the current progress while playing movies or episodes (i.e. not paused). This feature can be configured on the "Interval" page in the addon settings.
+Additionally, the current progress is sent at a regular interval while a movie or episode plays (i.e. not paused): every 15 minutes by default, adjustable from 5 to 60 minutes under **Settings > Scrobbling > Update interval**. MDBList runs a session's progress on from the last request, so the interval only matters when Kodi exits without sending a stop (a crash, or the device going to sleep).
 
 Events are mapped to MDBList endpoints as follows:
 
