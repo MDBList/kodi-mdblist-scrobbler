@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.17] - 2026-10-30
+
+* Fixed watch times being off by an hour for anything watched on the other side of a daylight-saving change, which made every such watch be sent to MDBList again after each switch.
+
 ## [1.3.16] - 2026-10-28
 
 * Interval scrobbles are now sent every 15 minutes by default instead of every 10 seconds, which used up the daily API limit for some users. The interval is now set in minutes (5 to 60), and existing settings are reset to the new default.
